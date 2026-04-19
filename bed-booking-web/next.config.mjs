@@ -1,6 +1,7 @@
 const nextConfig = {
     output: 'export',
     basePath: '/Chikki_Logs',
+    assetPrefix: '/Chikki_Logs',
     images: {
         unoptimized: true,
     },
@@ -10,4 +11,5 @@ const nextConfig = {
 };
 
 export default nextConfig;
+
 
