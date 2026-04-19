@@ -1,0 +1,15 @@
+export const COLLECTIONS = {
+    cities: "cities",
+    users: "users",
+    properties: "properties",
+    rooms: "rooms",
+    beds: "beds",
+    bedBlocks: "bed_blocks",
+    bedLocks: "bed_locks",
+    bookingAvailability: "booking_availability",
+    bookings: "bookings",
+    payments: "payments",
+    ownerPayouts: "owner_payouts",
+    auditLogs: "audit_logs",
+    ownerApplications: "owner_applications",
+};

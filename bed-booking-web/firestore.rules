@@ -1,0 +1,174 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function currentRole() {
+      return isSignedIn() ? currentUserDoc().data.role : null;
+    }
+
+    function isSuperadmin() {
+      return currentRole() == "superadmin";
+    }
+
+    function isOwner() {
+      return currentRole() == "owner";
+    }
+
+    function isConsumer() {
+      return currentRole() == "consumer";
+    }
+
+    function bookingDoc(bookingId) {
+      return get(/databases/$(database)/documents/bookings/$(bookingId));
+    }
+
+    function bookingDocAfter(bookingId) {
+      return getAfter(/databases/$(database)/documents/bookings/$(bookingId));
+    }
+
+    function propertyDoc(propertyId) {
+      return get(/databases/$(database)/documents/properties/$(propertyId));
+    }
+
+    match /cities/{cityId} {
+      allow read: if true;
+      allow write: if isSuperadmin();
+    }
+
+    match /users/{userId} {
+      // User profile writes are handled by trusted Cloud Functions only.
+      allow create: if false;
+
+      // Self-read always allowed; superadmin may query all users (e.g. owner count).
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperadmin());
+
+      // Superadmin can promote/demote role only (no other field changes allowed).
+      allow update: if isSuperadmin()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'updatedAt']);
+
+      allow delete: if false;
+    }
+
+    match /owner_applications/{appId} {
+      // Any signed-in user can create their own application. We only check auth uid
+      // match here — no currentUserDoc() lookup needed, so no extra permission required.
+      allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
+      allow read: if request.auth != null && (resource.data.userId == request.auth.uid || isSuperadmin());
+      allow update: if isSuperadmin();
+      allow delete: if isSuperadmin();
+    }
+
+    match /properties/{propertyId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /rooms/{roomId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /beds/{bedId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /bed_blocks/{blockId} {
+      allow read: if isSignedIn();
+      allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
+    }
+
+    match /bed_locks/{lockId} {
+      allow read: if isSignedIn();
+      allow create, update: if false;
+      allow delete: if isSuperadmin();
+    }
+
+    match /booking_availability/{entryId} {
+      allow read: if isSignedIn();
+      allow create: if isSuperadmin();
+      allow update: if isSuperadmin() ||
+        (
+          isConsumer() &&
+          bookingDocAfter(entryId).data.userId == request.auth.uid &&
+          request.resource.data.keys().hasOnly([
+            'propertyId',
+            'bedId',
+            'checkInAt',
+            'checkOutAt',
+            'bookingStatus',
+            'createdAt',
+            'updatedAt'
+          ]) &&
+          request.resource.data.propertyId == bookingDocAfter(entryId).data.propertyId &&
+          request.resource.data.bedId == bookingDocAfter(entryId).data.bedId &&
+          request.resource.data.bookingStatus in ['confirmed', 'checked_in', 'completed', 'cancelled']
+        );
+      allow delete: if isSuperadmin();
+    }
+
+    match /bookings/{bookingId} {
+      allow create: if false;
+      allow read: if isSuperadmin() ||
+        (
+          isConsumer() &&
+          resource.data.userId == request.auth.uid
+        ) ||
+        (
+          isOwner() &&
+          propertyDoc(resource.data.propertyId).data.ownerId == request.auth.uid
+        );
+      allow update: if isSuperadmin() ||
+        (
+          isConsumer() &&
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.userId == request.auth.uid &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['bookingStatus', 'updatedAt']) &&
+          resource.data.bookingStatus == 'confirmed' &&
+          request.resource.data.bookingStatus == 'checked_in' &&
+          // Enforce server-time check-in window: cannot check in before scheduled time
+          request.time.toMillis() >= (resource.data.checkInAt is string ?
+            (duration(resource.data.checkInAt).toMillis() ?? 0) : 0)
+        );
+      allow delete: if isSuperadmin();
+    }
+
+    match /payments/{paymentId} {
+      allow create: if false;
+      allow read: if isSuperadmin() ||
+        (
+          isConsumer() &&
+          bookingDoc(resource.data.bookingId).data.userId == request.auth.uid
+        ) ||
+        (
+          isOwner() &&
+          propertyDoc(bookingDoc(resource.data.bookingId).data.propertyId).data.ownerId == request.auth.uid
+        );
+      allow update: if isSuperadmin();
+      allow delete: if isSuperadmin();
+    }
+
+    match /owner_payouts/{payoutId} {
+      allow read: if isSuperadmin() ||
+        (isOwner() && resource.data.ownerId == request.auth.uid);
+      allow write: if isSuperadmin();
+    }
+
+    match /audit_logs/{auditId} {
+      allow create: if isSignedIn();
+      allow read: if isSuperadmin();
+      allow update, delete: if false;
+    }
+  }
+}
