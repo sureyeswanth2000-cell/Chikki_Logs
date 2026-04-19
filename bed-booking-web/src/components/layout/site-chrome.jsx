@@ -60,7 +60,7 @@ export function SiteChrome({ children }) {
         style={{
           backgroundColor: "rgba(255,255,255,0.88)",
           backgroundImage:
-            "linear-gradient(rgba(255,255,255,0.82), rgba(255,255,255,0.82)), url('/globe.svg')",
+            "linear-gradient(rgba(255,255,255,0.82), rgba(255,255,255,0.82)), url('/Chikki_Logs/globe.svg')",
           backgroundRepeat: "repeat",
           backgroundSize: "120px 120px",
         }}
@@ -69,12 +69,13 @@ export function SiteChrome({ children }) {
           {/* Logo - Start */}
           <Link href="/" className="group flex items-center gap-2">
             <Image
-              src="/window.svg"
+              src="/Chikki_Logs/window.svg"
               alt="Demo"
               width={32}
               height={32}
               className="rounded-full border border-slate-200 bg-white p-1"
             />
+
             <span className="font-semibold tracking-tight text-slate-900 transition group-hover:text-sky-700">
               Chikki Logs
             </span>
