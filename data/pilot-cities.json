@@ -1,0 +1,30 @@
+[
+  { "name": "Kavali", "state": "Andhra Pradesh", "active": true },
+  { "name": "Nellore", "state": "Andhra Pradesh", "active": true },
+  { "name": "Ongole", "state": "Andhra Pradesh", "active": true },
+  { "name": "Vijayawada", "state": "Andhra Pradesh", "active": true },
+  { "name": "Guntur", "state": "Andhra Pradesh", "active": true },
+  { "name": "Vizag", "state": "Andhra Pradesh", "active": true },
+  { "name": "Tirupati", "state": "Andhra Pradesh", "active": true },
+  { "name": "Kurnool", "state": "Andhra Pradesh", "active": true },
+  { "name": "Rajahmundry", "state": "Andhra Pradesh", "active": true },
+  { "name": "Kakinada", "state": "Andhra Pradesh", "active": true },
+
+  { "name": "Hyderabad", "state": "Telangana", "active": true },
+  { "name": "Warangal", "state": "Telangana", "active": true },
+
+  { "name": "Chennai", "state": "Tamil Nadu", "active": true },
+  { "name": "Coimbatore", "state": "Tamil Nadu", "active": true },
+  { "name": "Madurai", "state": "Tamil Nadu", "active": true },
+  { "name": "Salem", "state": "Tamil Nadu", "active": true },
+  { "name": "Tiruchirappalli", "state": "Tamil Nadu", "active": true },
+
+  { "name": "Bangalore", "state": "Karnataka", "active": true },
+  { "name": "Mysuru", "state": "Karnataka", "active": true },
+  { "name": "Mangaluru", "state": "Karnataka", "active": true },
+  { "name": "Hubballi", "state": "Karnataka", "active": true },
+
+  { "name": "Kochi", "state": "Kerala", "active": true },
+  { "name": "Thiruvananthapuram", "state": "Kerala", "active": true },
+  { "name": "Kozhikode", "state": "Kerala", "active": true }
+]

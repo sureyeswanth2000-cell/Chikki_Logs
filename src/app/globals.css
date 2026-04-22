@@ -1,0 +1,161 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+:root {
+  --background: #eff6ff;
+  --foreground: #0f172a;
+  --muted-foreground: #475569;
+  --surface: #ffffff;
+  --surface-soft: #f8fafc;
+  --accent: #0284c7;
+  --accent-strong: #0369a1;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-heading: var(--font-heading);
+}
+
+body {
+  position: relative;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), sans-serif;
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-heading), sans-serif;
+}
+
+.aurora-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 8% 12%, rgba(14, 165, 233, 0.18), transparent 34%),
+    radial-gradient(circle at 86% 16%, rgba(56, 189, 248, 0.16), transparent 38%),
+    radial-gradient(circle at 50% 88%, rgba(125, 211, 252, 0.2), transparent 44%);
+}
+
+.glass-card {
+  background: color-mix(in srgb, var(--surface) 92%, white 8%);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  box-shadow: 0 18px 45px -30px rgba(15, 23, 42, 0.4);
+}
+
+.shine-button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.shine-button::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  transform: translateX(-115%) skewX(-18deg);
+  background: linear-gradient(100deg, transparent, rgba(255, 255, 255, 0.35), transparent);
+  transition: transform 420ms ease;
+  z-index: -1;
+}
+
+.shine-button:hover::after {
+  transform: translateX(120%) skewX(-18deg);
+}
+
+.animate-rise {
+  animation: rise-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.animate-fade-in {
+  animation: fade-in 280ms ease both;
+}
+
+.animate-stagger {
+  animation: rise-in 540ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.animate-stagger:nth-child(2) {
+  animation-delay: 80ms;
+}
+
+.animate-stagger:nth-child(3) {
+  animation-delay: 160ms;
+}
+
+.animate-stagger:nth-child(4) {
+  animation-delay: 240ms;
+}
+
+.animate-list-item {
+  animation: rise-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.animate-list-item:nth-child(2) {
+  animation-delay: 70ms;
+}
+
+.animate-list-item:nth-child(3) {
+  animation-delay: 120ms;
+}
+
+.animate-list-item:nth-child(4) {
+  animation-delay: 170ms;
+}
+
+.animate-list-item:nth-child(5) {
+  animation-delay: 220ms;
+}
+
+.animate-list-item:nth-child(6) {
+  animation-delay: 270ms;
+}
+
+.animate-list-item:nth-child(7) {
+  animation-delay: 320ms;
+}
+
+.animate-list-item:nth-child(8) {
+  animation-delay: 370ms;
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .animate-fade-in,
+  .animate-stagger,
+  .animate-list-item {
+    animation: none !important;
+  }
+
+  .shine-button::after {
+    transition: none;
+    display: none;
+  }
+}

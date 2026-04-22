@@ -1,0 +1,11 @@
+▲ Next.js 16.1.7 (webpack)
+- Local:         http://localhost:3000
+- Network:       http://192.168.1.47:3000
+- Environments: .env.local
+
+✓ Starting...
+✓ Ready in 3.3s
+○ Compiling /login ...
+ GET /login?next=%2Fconsumer 200 in 11.0s (compile: 10.0s, render: 1012ms)
+ GET /consumer 200 in 2.3s (compile: 1732ms, render: 532ms)
+ GET /login?next=%2Fconsumer 200 in 88ms (compile: 34ms, render: 54ms)
