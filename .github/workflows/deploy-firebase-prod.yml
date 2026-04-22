@@ -1,0 +1,30 @@
+name: Deploy Firebase Hosting (prod)
+
+on:
+  push:
+    branches:
+      - prod
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build static site
+        run: npm run build
+
+      - name: Deploy to Firebase Hosting
+        run: npx firebase-tools deploy --only hosting --project chikki-logs-72607 --token "${{ secrets.FIREBASE_TOKEN }}"
