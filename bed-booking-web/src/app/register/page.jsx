@@ -112,7 +112,7 @@ export default function RegisterPage() {
                             id="phone"
                             value={phone}
                             onChange={(event) => setPhone(event.target.value)}
-                            placeholder="e.g., +966... or 10-digit mobile"
+                            placeholder="e.g., +91XXXXXXXXXX or 10-digit mobile"
                             className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 outline-none transition focus:border-sky-500"
                             required
                         />

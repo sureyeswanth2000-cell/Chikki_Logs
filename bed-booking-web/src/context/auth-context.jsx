@@ -308,12 +308,16 @@ export function AuthProvider({ children }) {
             // Passive warm-up, don't let it block
             const auth = getClientAuth();
             applyDeviceLanguage(auth);
-            // initializeRecaptchaConfig(auth).catch(() => {});
+            initializeRecaptchaConfig(auth).catch(() => {});
         }
         catch (err) {
             // Ignore
         }
     }, []);
+
+    useEffect(() => {
+        warmUpPhoneAuth();
+    }, [warmUpPhoneAuth]);
     const sendOtp = useCallback(async (rawPhone) => {
         let auth, phoneNumber;
         try {

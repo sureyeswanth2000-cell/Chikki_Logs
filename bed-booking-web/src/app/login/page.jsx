@@ -96,7 +96,7 @@ export default function LoginPage() {
             <label className="block text-sm font-medium text-slate-700" htmlFor="phone">
               Phone Number
             </label>
-            <input id="phone" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="e.g., +966... or 10-digit mobile" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 outline-none transition focus:border-sky-500" required/>
+            <input id="phone" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="e.g., +91XXXXXXXXXX or 10-digit mobile" className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 outline-none transition focus:border-sky-500" required/>
             <p className="text-xs text-slate-500">
               Development tip: if OTP is throttled, add a Firebase test phone number in Authentication &gt; Sign-in method &gt; Phone.
             </p>
