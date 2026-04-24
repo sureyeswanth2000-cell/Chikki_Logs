@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
+import { ProtectedRoute } from "@/components/auth/protected-route";
 import { getConsumerBookingHistory } from "@/lib/firestore/consumer";
 import { getOwnerBookingHistory } from "@/lib/firestore/owner";
 
@@ -74,6 +75,7 @@ export default function HistoryPage() {
   }
 
   return (
+    <ProtectedRoute allowedRoles={["consumer", "owner"]}>
     <main className="mx-auto max-w-6xl px-5 py-10 md:px-6 md:py-12">
       <section className="glass-card rounded-2xl p-6">
         <h1 className="text-2xl font-bold text-slate-900">{isOwnerHistory ? "Service History" : "Booking History"}</h1>
@@ -194,5 +196,6 @@ export default function HistoryPage() {
         )}
       </section>
     </main>
+    </ProtectedRoute>
   );
 }

@@ -23,6 +23,7 @@ export default function RootLayout({ children, }) {
         <Providers>
           <SiteChrome>{children}</SiteChrome>
         </Providers>
+        <Script src="https://www.google.com/recaptcha/api.js" strategy="beforeInteractive" />
       </body>
     </html>);
 }

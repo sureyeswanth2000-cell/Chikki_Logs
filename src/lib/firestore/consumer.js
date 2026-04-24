@@ -216,6 +216,14 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
     };
 }
 
+export async function getConsumerBookingCount(userId) {
+    if (!userId) {
+        return 0;
+    }
+    const bookingsSnapshot = await getDocs(query(collection(db, COLLECTIONS.bookings), where("userId", "==", userId)));
+    return bookingsSnapshot.size;
+}
+
 export async function getActiveCities() {
     try {
         const q = query(collection(db, COLLECTIONS.cities));

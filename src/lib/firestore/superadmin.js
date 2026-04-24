@@ -1,6 +1,7 @@
 import { addDoc, collection, deleteDoc, doc, getDocs, query, serverTimestamp, updateDoc, where } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
+import { recordPrivilegedAction, setUserRole } from "@/lib/cloud/security";
 
 function toMillis(value) {
   if (!value) return null;
@@ -111,12 +112,18 @@ export async function getCitiesWithOwners() {
 }
 
 export async function addCity({ name, state, active = true }) {
-  await addDoc(collection(db, COLLECTIONS.cities), {
+  const ref = await addDoc(collection(db, COLLECTIONS.cities), {
     name: name.trim(),
     state: state.trim(),
     active,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+  });
+  await recordPrivilegedAction({
+    action: "city_created",
+    entityType: "city",
+    entityId: ref.id,
+    metadata: { name: name.trim(), state: state.trim(), active },
   });
 }
 
@@ -127,10 +134,22 @@ export async function updateCity(cityId, { name, state, active }) {
     active,
     updatedAt: serverTimestamp(),
   });
+  await recordPrivilegedAction({
+    action: "city_updated",
+    entityType: "city",
+    entityId: cityId,
+    metadata: { name: name.trim(), state: state.trim(), active },
+  });
 }
 
 export async function deleteCity(cityId) {
   await deleteDoc(doc(db, COLLECTIONS.cities, cityId));
+  await recordPrivilegedAction({
+    action: "city_deleted",
+    entityType: "city",
+    entityId: cityId,
+    metadata: {},
+  });
 }
 
 export async function searchUserByPhone(phone) {
@@ -149,18 +168,16 @@ export async function searchUserByPhone(phone) {
   };
 }
 
+export async function updateManagedUserRole(userId, role) {
+  return setUserRole({ targetUid: userId, role });
+}
+
 export async function promoteUserToOwner(userId) {
-  await updateDoc(doc(db, COLLECTIONS.users, userId), {
-    role: "owner",
-    updatedAt: serverTimestamp(),
-  });
+  return updateManagedUserRole(userId, "owner");
 }
 
 export async function demoteOwnerToConsumer(userId) {
-  await updateDoc(doc(db, COLLECTIONS.users, userId), {
-    role: "consumer",
-    updatedAt: serverTimestamp(),
-  });
+  return updateManagedUserRole(userId, "consumer");
 }
 
 export async function getOwnerApplications() {
@@ -185,13 +202,16 @@ export async function getOwnerApplications() {
 }
 
 export async function approveOwnerApplication(applicationId, userId) {
-  await updateDoc(doc(db, COLLECTIONS.users, userId), {
-    role: "owner",
-    updatedAt: serverTimestamp(),
-  });
+  await setUserRole({ targetUid: userId, role: "owner" });
   await updateDoc(doc(db, COLLECTIONS.ownerApplications, applicationId), {
     status: "approved",
     updatedAt: serverTimestamp(),
+  });
+  await recordPrivilegedAction({
+    action: "owner_application_approved",
+    entityType: "owner_application",
+    entityId: applicationId,
+    metadata: { userId },
   });
 }
 
@@ -199,5 +219,11 @@ export async function rejectOwnerApplication(applicationId) {
   await updateDoc(doc(db, COLLECTIONS.ownerApplications, applicationId), {
     status: "rejected",
     updatedAt: serverTimestamp(),
+  });
+  await recordPrivilegedAction({
+    action: "owner_application_rejected",
+    entityType: "owner_application",
+    entityId: applicationId,
+    metadata: {},
   });
 }

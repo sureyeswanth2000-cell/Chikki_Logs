@@ -21,8 +21,16 @@ service cloud.firestore {
       return currentRole() == "owner";
     }
 
+    function isOperator() {
+      return currentRole() == "operator";
+    }
+
     function isConsumer() {
       return currentRole() == "consumer";
+    }
+
+    function isInternalOperator() {
+      return isOperator() || isSuperadmin();
     }
 
     function bookingDoc(bookingId) {
@@ -46,8 +54,8 @@ service cloud.firestore {
       // User profile writes are handled by trusted Cloud Functions only.
       allow create: if false;
 
-      // Self-read always allowed; superadmin may query all users (e.g. owner count).
-      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperadmin());
+      // Self-read always allowed; internal roles may query all users for monitoring.
+      allow read: if isSignedIn() && (request.auth.uid == userId || isInternalOperator());
 
       // Superadmin can promote/demote role only (no other field changes allowed).
       allow update: if isSuperadmin()
@@ -60,9 +68,9 @@ service cloud.firestore {
       // Any signed-in user can create their own application. We only check auth uid
       // match here — no currentUserDoc() lookup needed, so no extra permission required.
       allow create: if request.auth != null && request.resource.data.userId == request.auth.uid;
-      allow read: if request.auth != null && (resource.data.userId == request.auth.uid || isSuperadmin());
-      allow update: if isSuperadmin();
-      allow delete: if isSuperadmin();
+      allow read: if request.auth != null && (resource.data.userId == request.auth.uid || isInternalOperator());
+      allow update: if isInternalOperator();
+      allow delete: if false;
     }
 
     match /properties/{propertyId} {
@@ -120,9 +128,9 @@ service cloud.firestore {
 
     match /bookings/{bookingId} {
       allow create: if false;
-      allow read: if isSuperadmin() ||
+      allow read: if isInternalOperator() ||
         (
-          isConsumer() &&
+          (isConsumer() || isOwner()) &&
           resource.data.userId == request.auth.uid
         ) ||
         (
@@ -131,24 +139,21 @@ service cloud.firestore {
         );
       allow update: if isSuperadmin() ||
         (
-          isConsumer() &&
+          (isConsumer() || isOwner()) &&
           resource.data.userId == request.auth.uid &&
           request.resource.data.userId == request.auth.uid &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['bookingStatus', 'updatedAt']) &&
           resource.data.bookingStatus == 'confirmed' &&
-          request.resource.data.bookingStatus == 'checked_in' &&
-          // Enforce server-time check-in window: cannot check in before scheduled time
-          request.time.toMillis() >= (resource.data.checkInAt is string ?
-            (duration(resource.data.checkInAt).toMillis() ?? 0) : 0)
+          request.resource.data.bookingStatus == 'checked_in'
         );
       allow delete: if isSuperadmin();
     }
 
     match /payments/{paymentId} {
       allow create: if false;
-      allow read: if isSuperadmin() ||
+      allow read: if isInternalOperator() ||
         (
-          isConsumer() &&
+          (isConsumer() || isOwner()) &&
           bookingDoc(resource.data.bookingId).data.userId == request.auth.uid
         ) ||
         (
@@ -160,14 +165,14 @@ service cloud.firestore {
     }
 
     match /owner_payouts/{payoutId} {
-      allow read: if isSuperadmin() ||
+      allow read: if isInternalOperator() ||
         (isOwner() && resource.data.ownerId == request.auth.uid);
       allow write: if isSuperadmin();
     }
 
     match /audit_logs/{auditId} {
       allow create: if isSignedIn();
-      allow read: if isSuperadmin();
+      allow read: if isInternalOperator();
       allow update, delete: if false;
     }
   }

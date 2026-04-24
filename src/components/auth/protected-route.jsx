@@ -2,6 +2,12 @@
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
+
+function unauthorizedHref(pathname) {
+    const next = encodeURIComponent(pathname || "/");
+    return `/unauthorized?from=${next}`;
+}
+
 export function ProtectedRoute({ children, allowedRoles }) {
     const { loading, user, profile } = useAuth();
     const pathname = usePathname();
@@ -25,15 +31,15 @@ export function ProtectedRoute({ children, allowedRoles }) {
     useEffect(() => {
         if (!profileTimeout) return;
         if (!profile || !allowedRoles.includes(profile.role)) {
-            router.replace("/unauthorized");
+            router.replace(unauthorizedHref(pathname));
         }
-    }, [profileTimeout, profile, allowedRoles, router]);
+    }, [profileTimeout, profile, allowedRoles, pathname, router]);
 
     useEffect(() => {
         if (!loading && user && profile && !allowedRoles.includes(profile.role)) {
-            router.replace("/unauthorized");
+            router.replace(unauthorizedHref(pathname));
         }
-    }, [loading, user, profile, allowedRoles, router]);
+    }, [loading, user, profile, allowedRoles, pathname, router]);
 
     if (loading || !user) {
         return (<main className="mx-auto min-h-screen max-w-4xl px-6 py-16">

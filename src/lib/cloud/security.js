@@ -61,3 +61,23 @@ export async function authorizeOtpRequest(phoneNumber) {
     throw new Error(toMessage(error, "OTP request temporarily blocked. Please try again shortly."));
   }
 }
+
+export async function setUserRole(payload) {
+  const callable = httpsCallable(functionsClient(), "setUserRole");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update the user role."));
+  }
+}
+
+export async function recordPrivilegedAction(payload) {
+  const callable = httpsCallable(functionsClient(), "recordPrivilegedAction");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not record the privileged action log."));
+  }
+}

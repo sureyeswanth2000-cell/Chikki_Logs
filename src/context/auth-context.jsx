@@ -24,6 +24,7 @@ const PROFILE_CACHE_KEY = "chikki_profile_cache";
 const OTP_COOLDOWN_UNTIL_KEY = "chikki_otp_cooldown_until";
 const OTP_SEND_COOLDOWN_SECONDS = 45;
 const OTP_RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60;
+const OTP_EXPIRY_SECONDS = 5 * 60;
 
 function isFirestoreOfflineError(error) {
     const code = typeof error === "object" && error && "code" in error
@@ -92,11 +93,20 @@ function getReadableAuthError(error) {
     const code = typeof error === "object" && error && "code" in error
         ? String(error.code)
         : "";
+    if (code === "auth/invalid-api-key") {
+        return "Firebase is not configured correctly for this environment. Check the local or deployed Firebase web app credentials.";
+    }
+    if (code === "auth/network-request-failed") {
+        return "Network error while contacting authentication services. Check your connection and try again.";
+    }
+    if (code === "auth/internal-error") {
+        return "Authentication service returned an internal error. Please retry in a moment.";
+    }
     if (code === "auth/configuration-not-found") {
         return "Phone OTP is not enabled in Firebase Auth for this project. Enable Phone provider in Firebase Console and try again.";
     }
     if (code === "auth/invalid-app-credential" || code === "auth/captcha-check-failed") {
-        return "Phone OTP could not verify this app. Refresh the page and try again. If you are on localhost, add localhost to Firebase Auth > Settings > Authorized domains and disable any ad blocker that may block reCAPTCHA.";
+        return "Phone OTP could not verify this app. Check Firebase Auth authorized domains, ensure API key restrictions allow this domain, disable blockers for reCAPTCHA, and confirm the web app config belongs to the same Firebase project.";
     }
     if (code === "auth/unauthorized-domain") {
         return "This domain is not authorized for Firebase Auth. Add it in Firebase Console > Authentication > Settings > Authorized domains.";
@@ -161,6 +171,15 @@ function normalizePhone(raw) {
 
     throw new Error("Enter a valid phone number with country code.");
 }
+
+function isLocalDevHost() {
+    if (typeof window === "undefined") {
+        return false;
+    }
+    const host = window.location.hostname;
+    return host === "localhost" || host === "127.0.0.1";
+}
+
 function mapUserProfile(data) {
     const roleValue = typeof data.role === "string" ? data.role : "";
     if (!isUserRole(roleValue))
@@ -188,9 +207,13 @@ export function AuthProvider({ children }) {
     const [profile, setProfile] = useState(null);
     const [loading, setLoading] = useState(true);
     const [otpSent, setOtpSent] = useState(false);
+    const [lastOtpPhoneNumber, setLastOtpPhoneNumber] = useState("");
+    const [lastOtpIsTestNumber, setLastOtpIsTestNumber] = useState(false);
+    const [otpExpiresAtMs, setOtpExpiresAtMs] = useState(0);
     const [otpCooldownUntilMs, setOtpCooldownUntilMs] = useState(0);
     const [clockNowMs, setClockNowMs] = useState(Date.now());
     const confirmationRef = useRef(null);
+    const recaptchaSlotIdRef = useRef(null);
     const isGoogleLinked = Boolean(user?.providerData?.some((provider) => provider.providerId === "google.com"));
 
     const clearRecaptcha = useCallback(() => {
@@ -201,6 +224,11 @@ export function AuthProvider({ children }) {
             window.recaptchaVerifier.clear();
             window.recaptchaVerifier = null;
         }
+        const container = document.getElementById("recaptcha-container");
+        if (container) {
+            container.innerHTML = "";
+        }
+        recaptchaSlotIdRef.current = null;
     }, []);
 
     useEffect(() => {
@@ -222,6 +250,14 @@ export function AuthProvider({ children }) {
             writeOtpCooldownUntil(0);
         }
     }, [clockNowMs, otpCooldownUntilMs]);
+
+    useEffect(() => {
+        if (otpExpiresAtMs > 0 && otpExpiresAtMs <= clockNowMs) {
+            setOtpSent(false);
+            setOtpExpiresAtMs(0);
+            confirmationRef.current = null;
+        }
+    }, [clockNowMs, otpExpiresAtMs]);
 
     useEffect(() => {
         const auth = getClientAuth();
@@ -289,10 +325,14 @@ export function AuthProvider({ children }) {
             console.log("[RECAPTCHA] Returning existing verifier");
             return window.recaptchaVerifier;
         }
+
+        const slotId = `recaptcha-slot-${Date.now()}`;
+        container.innerHTML = `<div id="${slotId}"></div>`;
+        recaptchaSlotIdRef.current = slotId;
         
         console.log("[RECAPTCHA] Creating new RecaptchaVerifier...");
         const auth = getClientAuth();
-        window.recaptchaVerifier = new RecaptchaVerifier(auth, "recaptcha-container", {
+        window.recaptchaVerifier = new RecaptchaVerifier(auth, slotId, {
             size: "invisible", // Better user experience and less prone to UI failures
             "expired-callback": () => {
                 console.log("[RECAPTCHA] reCAPTCHA widget expired, clearing");
@@ -308,12 +348,17 @@ export function AuthProvider({ children }) {
             // Passive warm-up, don't let it block
             const auth = getClientAuth();
             applyDeviceLanguage(auth);
-            // initializeRecaptchaConfig(auth).catch(() => {});
+            initializeRecaptchaConfig(auth).catch(() => {});
         }
         catch (err) {
             // Ignore
         }
     }, []);
+
+    useEffect(() => {
+        warmUpPhoneAuth();
+    }, [warmUpPhoneAuth]);
+
     const sendOtp = useCallback(async (rawPhone) => {
         let auth, phoneNumber;
         try {
@@ -330,10 +375,17 @@ export function AuthProvider({ children }) {
             console.log("[OTP] Normalized phone:", phoneNumber);
 
             // Server-side abuse checks before OTP dispatch.
-            await authorizeOtpRequest(phoneNumber);
+            const authz = await authorizeOtpRequest(phoneNumber);
+            const isTestNumber = Boolean(authz?.isTest);
             
             auth = getClientAuth();
             console.log("[OTP] Got auth instance");
+
+            // For local development with Firebase test numbers, allow mock app verification.
+            if (isTestNumber && isLocalDevHost()) {
+                auth.settings.appVerificationDisabledForTesting = true;
+                console.log("[OTP] Local test-number flow: appVerificationDisabledForTesting enabled");
+            }
             
             console.log("[OTP] Checking grecaptcha global...", typeof window.grecaptcha);
             if (typeof window.grecaptcha === "undefined") {
@@ -353,9 +405,13 @@ export function AuthProvider({ children }) {
             console.log("[OTP] OTP sent successfully");
             
             setOtpSent(true);
+            setLastOtpPhoneNumber(phoneNumber);
+            setLastOtpIsTestNumber(isTestNumber);
+            setOtpExpiresAtMs(Date.now() + OTP_EXPIRY_SECONDS * 1000);
             const nextCooldownUntil = Date.now() + OTP_SEND_COOLDOWN_SECONDS * 1000;
             setOtpCooldownUntilMs(nextCooldownUntil);
             writeOtpCooldownUntil(nextCooldownUntil);
+            return { phoneNumber, isTestNumber };
         }
         catch (error) {
             console.error("[OTP] Error in sendOtp:", error);
@@ -368,8 +424,7 @@ export function AuthProvider({ children }) {
 
             // A stale/expired widget can fail after route changes; recreate once and retry.
             if (message.includes("reCAPTCHA client element has been removed") ||
-                errorCode === "auth/captcha-check-failed" ||
-                errorCode === "auth/invalid-app-credential") {
+                errorCode === "auth/captcha-check-failed") {
                 try {
                     console.log("[OTP] Retrying after recaptcha failure...");
                     clearRecaptcha();
@@ -378,9 +433,13 @@ export function AuthProvider({ children }) {
                     confirmationRef.current = await signInWithPhoneNumber(auth, phoneNumber, retryVerifier);
                     console.log("[OTP] OTP sent on retry");
                     setOtpSent(true);
+                    setLastOtpPhoneNumber(phoneNumber);
+                    setLastOtpIsTestNumber(false);
+                    setOtpExpiresAtMs(Date.now() + OTP_EXPIRY_SECONDS * 1000);
                     const nextCooldownUntil = Date.now() + OTP_SEND_COOLDOWN_SECONDS * 1000;
                     setOtpCooldownUntilMs(nextCooldownUntil);
                     writeOtpCooldownUntil(nextCooldownUntil);
+                    return { phoneNumber, isTestNumber: false };
                 }
                 catch (retryError) {
                     console.error("[OTP] Retry failed:", retryError);
@@ -400,6 +459,12 @@ export function AuthProvider({ children }) {
     const verifyOtp = useCallback(async (otpCode) => {
         if (!confirmationRef.current) {
             throw new Error("Send OTP first.");
+        }
+        if (otpExpiresAtMs > 0 && Date.now() > otpExpiresAtMs) {
+            setOtpSent(false);
+            setOtpExpiresAtMs(0);
+            confirmationRef.current = null;
+            throw new Error("OTP expired. Please request a new OTP.");
         }
         let result;
         try {
@@ -423,8 +488,11 @@ export function AuthProvider({ children }) {
         setProfile(nextProfile);
         writeCachedProfile(nextProfile);
         setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
         confirmationRef.current = null;
-    }, []);
+    }, [otpExpiresAtMs]);
     const signInWithGoogle = useCallback(async () => {
         const auth = getClientAuth();
         const provider = new GoogleAuthProvider();
@@ -457,6 +525,9 @@ export function AuthProvider({ children }) {
         setProfile(mappedProfile);
         writeCachedProfile(mappedProfile);
         setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
     }, [clearRecaptcha]);
@@ -493,6 +564,9 @@ export function AuthProvider({ children }) {
         setProfile(mappedProfile);
         writeCachedProfile(mappedProfile);
         setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
         return mappedProfile;
@@ -587,28 +661,47 @@ export function AuthProvider({ children }) {
         await signOut(auth);
         setProfile(null);
         setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
         confirmationRef.current = null;
         clearCachedProfile();
         clearRecaptcha();
     }, [clearRecaptcha]);
+
+    const resetOtpFlow = useCallback(() => {
+        setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
+        confirmationRef.current = null;
+        clearRecaptcha();
+    }, [clearRecaptcha]);
+
     const value = useMemo(() => ({
         user,
         profile,
         loading,
         otpSent,
+        lastOtpPhoneNumber,
+        lastOtpIsTestNumber,
+        otpExpiresInSeconds: otpExpiresAtMs > clockNowMs
+            ? Math.ceil((otpExpiresAtMs - clockNowMs) / 1000)
+            : 0,
         otpResendInSeconds: otpCooldownUntilMs > clockNowMs
             ? Math.ceil((otpCooldownUntilMs - clockNowMs) / 1000)
             : 0,
         isGoogleLinked,
         sendOtp,
         verifyOtp,
+        resetOtpFlow,
         registerWithEmail,
         signInWithEmail,
         signInWithGoogle,
         linkGoogleToCurrentUser,
         signOutUser,
         refreshProfile,
-    }), [clockNowMs, isGoogleLinked, loading, otpCooldownUntilMs, otpSent, profile, refreshProfile, sendOtp, verifyOtp, registerWithEmail, signInWithEmail, signInWithGoogle, linkGoogleToCurrentUser, signOutUser, user]);
+    }), [clockNowMs, isGoogleLinked, lastOtpIsTestNumber, lastOtpPhoneNumber, loading, otpCooldownUntilMs, otpExpiresAtMs, otpSent, profile, refreshProfile, resetOtpFlow, sendOtp, verifyOtp, registerWithEmail, signInWithEmail, signInWithGoogle, linkGoogleToCurrentUser, signOutUser, user]);
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 export function useAuth() {

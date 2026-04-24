@@ -15,16 +15,17 @@ const basePrimaryNav = [
 
 const ownerPrimaryNav = [
   { href: "/owner", label: "Owner Portal" },
+  { href: "/consumer", label: "Switch to Consumer Mode" },
   { href: "/owner/beds", label: "Create Inventory" },
   { href: "/owner/property-status", label: "Inventory Status" },
   { href: "/history", label: "Service History" },
   { href: "/support", label: "Support" },
 ];
 
-const superadminPrimaryNav = [
-  { href: "/history", label: "History" },
-  { href: "/cities", label: "Cities" },
-  { href: "/superadmin", label: "Superadmin" },
+const operatorPrimaryNav = [
+  { href: "/operator", label: "Operator Console" },
+  { href: "/history", label: "Service History" },
+  { href: "/support", label: "Support" },
 ];
 
 function isActive(pathname, href) {
@@ -38,10 +39,10 @@ export function SiteChrome({ children }) {
   const { user, profile, signOutUser } = useAuth();
 
   const primaryNav =
-    profile?.role === "superadmin"
-      ? superadminPrimaryNav
-      : profile?.role === "owner"
+    profile?.role === "owner"
       ? ownerPrimaryNav
+      : profile?.role === "operator"
+      ? operatorPrimaryNav
       : basePrimaryNav;
 
   const profileLabel = profile?.name || user?.phoneNumber || "Profile";

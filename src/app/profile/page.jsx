@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
+import { ProtectedRoute } from "@/components/auth/protected-route";
 import { updateUserProfile } from "@/lib/firestore/profile";
 
 function maskAadhaar(value) {
@@ -127,6 +128,7 @@ function ProfileContent() {
     }
 
     return (
+        <ProtectedRoute allowedRoles={["consumer", "owner", "operator", "superadmin"]}>
         <main className="mx-auto max-w-2xl px-5 py-10 md:px-6 md:py-12">
             <section className="glass-card animate-rise rounded-2xl p-8">
                 <div className="flex items-center justify-between gap-3">
@@ -277,6 +279,7 @@ function ProfileContent() {
                 )}
             </section>
         </main>
+        </ProtectedRoute>
     );
 }
 

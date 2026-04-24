@@ -196,10 +196,25 @@ function profileResponse(data, phoneNumber) {
 }
 
 function assertAllowedRole(role) {
-  const allowed = new Set(["consumer", "owner", "superadmin"]);
+  const allowed = new Set(["consumer", "owner", "operator", "superadmin"]);
   if (!allowed.has(role)) {
     throw new HttpsError("invalid-argument", "Invalid role requested.");
   }
+}
+
+function assertAllowedEntityType(entityType) {
+  const allowed = new Set(["city", "user", "owner_application", "access"]);
+  if (!allowed.has(entityType)) {
+    throw new HttpsError("invalid-argument", "Invalid entity type for privileged action log.");
+  }
+}
+
+async function getCurrentRole(uid) {
+  const snap = await db.collection("users").doc(uid).get();
+  if (!snap.exists) {
+    return "";
+  }
+  return String(snap.data()?.role ?? "").trim();
 }
 
 function toMillisOrNull(value) {
@@ -283,6 +298,10 @@ async function logSecurityEvent({ actorUserId, action, metadata }) {
 async function enforceRateLimit(transaction, key, limit, windowMs) {
   const ref = db.collection("security_rate_limits").doc(key);
   const snap = await transaction.get(ref);
+  return enforceRateLimitWithSnapshot(transaction, ref, snap, limit, windowMs);
+}
+
+function enforceRateLimitWithSnapshot(transaction, ref, snap, limit, windowMs) {
   const now = Date.now();
 
   if (!snap.exists) {
@@ -447,13 +466,40 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
   }
   assertAllowedRole(targetRole);
 
-  const callerRef = db.collection("users").doc(callerUid);
-  const callerSnap = await callerRef.get();
-  if (!callerSnap.exists || callerSnap.data()?.role !== "superadmin") {
-    throw new HttpsError("permission-denied", "Only superadmin can assign roles.");
+  const callerRole = await getCurrentRole(callerUid);
+  if (!callerRole) {
+    throw new HttpsError("permission-denied", "Only privileged internal roles can assign roles.");
+  }
+  const targetRef = db.collection("users").doc(targetUid);
+  const targetSnap = await targetRef.get();
+  const currentTargetRole = String(targetSnap.data()?.role ?? "consumer").trim() || "consumer";
+
+  if (currentTargetRole === "superadmin") {
+    throw new HttpsError("permission-denied", "Superadmin accounts cannot be modified from the UI.");
   }
 
-  const targetRef = db.collection("users").doc(targetUid);
+  if (callerRole === "operator") {
+    const allowedOperatorRoles = new Set(["consumer", "owner"]);
+    if (!allowedOperatorRoles.has(currentTargetRole) || !allowedOperatorRoles.has(targetRole)) {
+      throw new HttpsError(
+        "permission-denied",
+        "Operator can only swap roles between consumer and owner."
+      );
+    }
+  } else if (callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can assign roles.");
+  }
+
+  if (currentTargetRole === targetRole) {
+    return {
+      ok: true,
+      targetUid,
+      role: targetRole,
+      previousRole: currentTargetRole,
+      changed: false,
+    };
+  }
+
   await targetRef.set(
     {
       role: targetRole,
@@ -464,12 +510,14 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
 
   await db.collection("audit_logs").add({
     actorUserId: callerUid,
-    actorRole: "superadmin",
+    actorRole: callerRole,
     action: "user_role_changed",
     entityType: "user",
     entityId: targetUid,
     metadata: {
-      role: targetRole,
+      previousRole: currentTargetRole,
+      nextRole: targetRole,
+      source: "internal_role_console",
     },
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -478,7 +526,44 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     ok: true,
     targetUid,
     role: targetRole,
+    previousRole: currentTargetRole,
+    changed: true,
   };
+});
+
+exports.recordPrivilegedAction = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can write privileged action logs.");
+  }
+
+  const action = normalizeText(request.data?.action, 120);
+  const entityType = normalizeText(request.data?.entityType, 60);
+  const entityId = normalizeText(request.data?.entityId, 120);
+  const metadata = request.data?.metadata && typeof request.data.metadata === "object"
+    ? request.data.metadata
+    : {};
+
+  if (!action || !entityType || !entityId) {
+    throw new HttpsError("invalid-argument", "action, entityType, and entityId are required.");
+  }
+
+  assertAllowedEntityType(entityType);
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action,
+    entityType,
+    entityId,
+    metadata,
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true };
 });
 
 exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
@@ -603,11 +688,6 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
 
   try {
     await db.runTransaction(async (transaction) => {
-      const rate = await enforceRateLimit(transaction, `booking_create_${userId}`, 4, 10 * 60 * 1000);
-      if (rate.limited) {
-        throw new HttpsError("resource-exhausted", "Too many booking attempts. Wait a few minutes and try again.");
-      }
-
       const lockSnap = await transaction.get(lockRef);
       const now = Date.now();
       if (lockSnap.exists) {
@@ -616,6 +696,11 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         if (lockedUntilMs > now) {
           throw new HttpsError("aborted", "This bed is currently being booked by another user. Please try again.");
         }
+      }
+
+      const rate = await enforceRateLimit(transaction, `booking_create_${userId}`, 4, 10 * 60 * 1000);
+      if (rate.limited) {
+        throw new HttpsError("resource-exhausted", "Too many booking attempts. Wait a few minutes and try again.");
       }
 
       transaction.set(lockRef, {
@@ -722,8 +807,15 @@ exports.authorizeOtpRequest = onCall({ cors: true }, async (request) => {
   }
 
   await db.runTransaction(async (transaction) => {
-    phoneRate = await enforceRateLimit(transaction, `otp_phone_${phoneKey}`, 5, 15 * 60 * 1000);
-    ipRate = await enforceRateLimit(transaction, `otp_ip_${ipKey}`, 20, 15 * 60 * 1000);
+    const phoneRef = db.collection("security_rate_limits").doc(`otp_phone_${phoneKey}`);
+    const ipRef = db.collection("security_rate_limits").doc(`otp_ip_${ipKey}`);
+
+    // Read all transaction docs first, then perform writes to satisfy Firestore ordering rules.
+    const phoneSnap = await transaction.get(phoneRef);
+    const ipSnap = await transaction.get(ipRef);
+
+    phoneRate = enforceRateLimitWithSnapshot(transaction, phoneRef, phoneSnap, 5, 15 * 60 * 1000);
+    ipRate = enforceRateLimitWithSnapshot(transaction, ipRef, ipSnap, 20, 15 * 60 * 1000);
   });
 
   if (phoneRate?.limited || ipRate?.limited) {

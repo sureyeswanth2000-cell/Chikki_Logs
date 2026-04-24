@@ -1,9 +1,13 @@
 # Chikki Beds Web MVP
 
+## Canonical Product Documentation
+- Chikki Masterbook: [docs/CHIKKI_MASTERBOOK.md](./docs/CHIKKI_MASTERBOOK.md)
+
 Website-first MVP for bed booking platform with three role views:
 - Consumer
 - Owner
-- Superadmin
+- Operator
+- Superadmin (hidden internal path)
 
 ## Tech Stack
 - Next.js (App Router, TypeScript)
@@ -50,7 +54,10 @@ Open http://localhost:3000
 - / (landing)
 - /consumer
 - /owner
-- /superadmin
+- /operator
+
+Hidden internal page:
+- /internal-control (superadmin only)
 
 ## Firestore Seed (Pilot Cities)
 Run this command after .env.local is configured:
@@ -96,12 +103,12 @@ Credentials note for this app:
 - Payment gateway integration in later phase.
 
 ## Completed Features (Non-Payment)
-- Role-based auth and protected routes (consumer/owner/superadmin)
+- Role-based auth and protected routes (consumer/owner/operator/hidden-superadmin)
 - Owner inventory CRUD (properties, rooms, beds)
 - Bed block management with full-block option
 - Consumer city search, filters, and booking flow
 - Booking conflict checks and short booking lock to reduce double booking
-- Superadmin live KPI cards from Firestore data
+- Internal operator and superadmin consoles with audit-backed role control
 
 ## Firestore Security Rules
 Rules file is available at:

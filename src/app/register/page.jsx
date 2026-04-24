@@ -3,12 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { dashboardPathByRole } from "@/types/roles";
+import { defaultPostAuthPath } from "@/types/roles";
 
 export default function RegisterPage() {
     const router = useRouter();
     const [nextPath, setNextPath] = useState(null);
-    const { user, profile, otpSent, sendOtp, verifyOtp, signInWithGoogle, loading } = useAuth();
+    const { user, profile, otpSent, lastOtpPhoneNumber, lastOtpIsTestNumber, otpExpiresInSeconds, sendOtp, verifyOtp, resetOtpFlow, signInWithGoogle, loading } = useAuth();
     const [phone, setPhone] = useState("");
     const [otp, setOtp] = useState("");
     const [otpSubmitting, setOtpSubmitting] = useState(false);
@@ -19,11 +19,11 @@ export default function RegisterPage() {
         if (nextPath && nextPath.startsWith("/")) {
             return nextPath;
         }
-        if (profile) {
-            return dashboardPathByRole(profile.role);
+        if (profile?.role) {
+            return defaultPostAuthPath(profile.role);
         }
         return "/";
-    }, [nextPath, profile]);
+    }, [nextPath, profile?.role]);
 
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
@@ -83,12 +83,28 @@ export default function RegisterPage() {
         }
     }
 
+    function handleEditPhone() {
+        if (lastOtpPhoneNumber) {
+            setPhone(lastOtpPhoneNumber);
+        }
+        setOtp("");
+        setError(null);
+        resetOtpFlow();
+    }
+
+    function formatSeconds(totalSeconds) {
+        const safe = Math.max(0, Number(totalSeconds) || 0);
+        const minutes = Math.floor(safe / 60);
+        const seconds = safe % 60;
+        return `${minutes}:${String(seconds).padStart(2, "0")}`;
+    }
+
     return (
         <main className="mx-auto max-w-3xl px-5 py-10 md:px-6 md:py-12">
             <section className="glass-card animate-rise rounded-2xl p-8">
                 <h1 className="text-3xl font-bold">Create Account</h1>
                 <p className="mt-3 text-sm text-slate-700">
-                    Register with your phone number. Role access comes from the Firestore user profile.
+                    Register with your phone number or Google. You can complete missing profile details later after logging in.
                 </p>
 
                 {error && (
@@ -112,7 +128,7 @@ export default function RegisterPage() {
                             id="phone"
                             value={phone}
                             onChange={(event) => setPhone(event.target.value)}
-                            placeholder="e.g., +966... or 10-digit mobile"
+                            placeholder="e.g., +91XXXXXXXXXX or 10-digit mobile"
                             className="w-full rounded-xl border border-slate-300 bg-white px-4 py-2 outline-none transition focus:border-sky-500"
                             required
                         />
@@ -129,6 +145,20 @@ export default function RegisterPage() {
                     </form>
                 ) : (
                     <form className="mt-6 space-y-4" onSubmit={handleVerifyOtp}>
+                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                            <p>
+                                OTP sent to <span className="font-semibold">{lastOtpPhoneNumber || "your number"}</span>
+                            </p>
+                            <div className="mt-2 flex items-center gap-3">
+                                <button type="button" onClick={handleEditPhone} className="text-xs font-semibold text-sky-700 underline decoration-sky-500">
+                                    Edit phone number
+                                </button>
+                                <span className="text-xs text-slate-600">OTP expires in {formatSeconds(otpExpiresInSeconds)}</span>
+                                {lastOtpIsTestNumber ? (
+                                    <span className="text-xs text-amber-700">Testing number detected: Firebase may not send real SMS. Use the configured test OTP code.</span>
+                                ) : null}
+                            </div>
+                        </div>
                         <label className="block text-sm font-medium text-slate-700" htmlFor="otp">
                             OTP Code
                         </label>
@@ -169,7 +199,7 @@ export default function RegisterPage() {
                 <div id="recaptcha-container" className="mt-6" />
 
                 <p className="mt-6 text-xs text-slate-500">
-                    By continuing, you agree that Aadhaar is mandatory at booking stage.
+                    First booking is easier: Aadhaar is not required for the first booking. It becomes mandatory starting with the second booking.
                 </p>
 
                 <div className="mt-5 space-y-2">

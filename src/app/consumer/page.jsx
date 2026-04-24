@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import {
@@ -7,6 +8,7 @@ import {
     checkoutOpenBooking,
     createBookingWithAdvance,
     getActiveCities,
+    getConsumerBookingCount,
     getListingsByCity,
     getOpenConsumerBookings,
     validateAadhaar,
@@ -50,6 +52,8 @@ function getElapsedHours(checkInAt) {
 }
 
 export default function ConsumerPage() {
+    const router = useRouter();
+    const searchParams = useSearchParams();
     const { profile, user } = useAuth();
     const [cities, setCities] = useState([]);
     const [loadingCities, setLoadingCities] = useState(true);
@@ -69,14 +73,19 @@ export default function ConsumerPage() {
     const [bookingLoading, setBookingLoading] = useState(false);
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
     const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
+    const [bookingCount, setBookingCount] = useState(0);
     const bookingSectionRef = useRef(null);
 
     const selectedCityName = useMemo(() => cities.find((item) => item.id === cityId)?.name ?? "", [cities, cityId]);
     const hasSavedAadhaar = Boolean(profile?.hasAadhaar);
+    const aadhaarRequiredForBooking = bookingCount >= 1;
     const minCheckInAt = useMemo(() => nowInputDateTime(), []);
 
     const loadOpenBookings = useCallback(async () => {
-        if (!user?.uid) return;
+        if (!user?.uid) {
+            setOpenBookings([]);
+            return;
+        }
         setLoadingOpenBookings(true);
         try {
             const rows = await getOpenConsumerBookings(user.uid);
@@ -85,6 +94,36 @@ export default function ConsumerPage() {
             setLoadingOpenBookings(false);
         }
     }, [user?.uid]);
+
+    const runSearch = useCallback(async (nextCityId = cityId) => {
+        if (!nextCityId) {
+            setError("Select a city before searching.");
+            return;
+        }
+        setError(null);
+        setNotice(null);
+        setLoadingListings(true);
+        setSelectedListing(null);
+        try {
+            const parsedMaxPrice = Number(maxFinalPrice);
+            const results = await getListingsByCity({
+                cityId: nextCityId,
+                duration,
+                bedFilter,
+                maxFinalPrice: maxFinalPrice.trim().length > 0 && !Number.isNaN(parsedMaxPrice)
+                    ? parsedMaxPrice
+                    : undefined,
+            });
+            setListings(results);
+            if (results.length === 0) {
+                setNotice("No listings found for selected filters.");
+            }
+        } catch (searchError) {
+            setError(searchError instanceof Error ? searchError.message : "Failed to load listings.");
+        } finally {
+            setLoadingListings(false);
+        }
+    }, [bedFilter, cityId, duration, maxFinalPrice]);
 
     useEffect(() => {
         async function loadCities() {
@@ -103,41 +142,52 @@ export default function ConsumerPage() {
     }, []);
 
     useEffect(() => {
+        const initialCityId = searchParams.get("cityId");
+        const initialDuration = searchParams.get("duration");
+        const initialBedFilter = searchParams.get("bedFilter");
+        if (initialCityId) {
+            setCityId(initialCityId);
+            void runSearch(initialCityId);
+        }
+        if (initialDuration && ["hourly", "overnight", "overday"].includes(initialDuration)) {
+            setDuration(initialDuration);
+        }
+        if (initialBedFilter && ["all", "AC", "NON_AC"].includes(initialBedFilter)) {
+            setBedFilter(initialBedFilter);
+        }
+    }, [runSearch, searchParams]);
+
+    useEffect(() => {
         void loadOpenBookings();
     }, [loadOpenBookings]);
 
+    useEffect(() => {
+        async function loadBookingCount() {
+            if (!user?.uid) {
+                setBookingCount(0);
+                return;
+            }
+            try {
+                const total = await getConsumerBookingCount(user.uid);
+                setBookingCount(total);
+            } catch {
+                setBookingCount(0);
+            }
+        }
+        void loadBookingCount();
+    }, [user?.uid]);
+
     async function handleSearch(event) {
         event?.preventDefault();
-        if (!cityId) {
-            setError("Select a city before searching.");
-            return;
-        }
-        setError(null);
-        setNotice(null);
-        setLoadingListings(true);
-        setSelectedListing(null);
-        try {
-            const parsedMaxPrice = Number(maxFinalPrice);
-            const results = await getListingsByCity({
-                cityId,
-                duration,
-                bedFilter,
-                maxFinalPrice: maxFinalPrice.trim().length > 0 && !Number.isNaN(parsedMaxPrice)
-                    ? parsedMaxPrice
-                    : undefined,
-            });
-            setListings(results);
-            if (results.length === 0) {
-                setNotice("No listings found for selected filters.");
-            }
-        } catch (searchError) {
-            setError(searchError instanceof Error ? searchError.message : "Failed to load listings.");
-        } finally {
-            setLoadingListings(false);
-        }
+        await runSearch();
     }
 
     function openBookingSheet(listing) {
+        if (!user?.uid) {
+            const next = encodeURIComponent(`/consumer?cityId=${cityId || ""}&duration=${duration}&bedFilter=${bedFilter}`);
+            router.push(`/login?next=${next}`);
+            return;
+        }
         setSelectedListing(listing);
         setError(null);
         setNotice(null);
@@ -151,8 +201,8 @@ export default function ConsumerPage() {
         event.preventDefault();
         if (!user?.uid || !selectedListing) return;
 
-        if (!validateAadhaar(aadhaarNumber)) {
-            setError("Enter valid 12-digit Aadhaar number.");
+        if (aadhaarRequiredForBooking && !validateAadhaar(aadhaarNumber)) {
+            setError("Aadhaar is required from your second booking onward. Enter a valid 12-digit Aadhaar number.");
             return;
         }
 
@@ -181,6 +231,7 @@ export default function ConsumerPage() {
             setCheckInAt("");
             setSelectedListing(null);
             await loadOpenBookings();
+            setBookingCount((current) => current + 1);
         } catch (bookingError) {
             setError(bookingError instanceof Error ? bookingError.message : "Booking failed.");
         } finally {
@@ -232,24 +283,30 @@ export default function ConsumerPage() {
     }
 
     return (
-        <ProtectedRoute allowedRoles={["consumer"]}>
+        <ProtectedRoute allowedRoles={["consumer", "owner"]}>
         <main className="mx-auto max-w-6xl px-5 py-10 md:px-6 md:py-12">
             <div className="glass-card animate-rise flex items-center justify-between gap-3 rounded-2xl p-6">
                 <div>
                     <h1 className="text-3xl font-bold">Consumer Portal</h1>
                     <p className="mt-2 text-xs text-slate-500">
-                        Logged in as role: {profile?.role ?? "unknown"}
+                        {user ? `Logged in as role: ${profile?.role ?? "consumer"}` : "Browse openly and sign in only when you are ready to book."}
                     </p>
                 </div>
             </div>
 
-            <p className="mt-3 text-slate-700">Browse by city, filter nearby listings, and book available beds.</p>
+            <p className="mt-3 text-slate-700">Browse by city, confirm your location, filter nearby listings, and book available beds.</p>
 
             {error && <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
             {notice && <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
 
+            {!user ? (
+                <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+                    You can browse listings without login. We will ask you to sign in only when you click to book a bed.
+                </div>
+            ) : null}
+
             <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
-                <h2 className="text-xl font-semibold">Search Beds</h2>
+                <h2 className="text-xl font-semibold">Confirm Location And Search Beds</h2>
                 <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={handleSearch}>
                     <select value={cityId} onChange={(event) => setCityId(event.target.value)} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required disabled={loadingCities}>
                         <option value="">{loadingCities ? "Loading cities..." : "Select city"}</option>
@@ -289,98 +346,108 @@ export default function ConsumerPage() {
                             <p className="mt-1 text-xs text-slate-500">Price source: owner-set bed prices + platform charges.</p>
                             <div className="mt-3 flex gap-2">
                                 <a href={`https://www.google.com/maps?q=${item.lat},${item.lng}`} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Open Map</a>
-                                <button type="button" onClick={() => openBookingSheet(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">Book This</button>
+                                <button type="button" onClick={() => openBookingSheet(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
+                                    {user ? "Book This" : "Login To Book"}
+                                </button>
                             </div>
                         </article>
                     ))}
                 </div>
             </section>
 
-            <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
-                <h2 className="text-xl font-semibold">Live / Open Bookings</h2>
-                <p className="mt-1 text-sm text-slate-500">Flow: Booked until check-in time, then Check-In, then Checkout at end of stay.</p>
-                {loadingOpenBookings ? (
-                    <p className="mt-4 text-sm text-slate-500">Loading open bookings...</p>
-                ) : openBookings.length === 0 ? (
-                    <p className="mt-4 text-sm text-slate-500">No open bookings currently.</p>
-                ) : (
-                    <div className="mt-4 overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
-                                    <th className="pb-2 text-left font-semibold">Booking ID</th>
-                                    <th className="pb-2 text-left font-semibold">Property</th>
-                                    <th className="pb-2 text-left font-semibold">Room</th>
-                                    <th className="pb-2 text-left font-semibold">Bed</th>
-                                    <th className="pb-2 text-left font-semibold">Check-In</th>
-                                    <th className="pb-2 text-left font-semibold">Status</th>
-                                    <th className="pb-2 text-left font-semibold">Live Hours</th>
-                                    <th className="pb-2 text-left font-semibold">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {openBookings.map((item) => (
-                                    <tr key={item.id}>
-                                        <td className="py-2 font-mono text-xs text-slate-700">
-                                            <div className="flex items-center gap-2">
-                                                <span>{item.bookingCode || item.id}</span>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleCopyBookingId(item.bookingCode, item.id)}
-                                                    className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50"
-                                                >
-                                                    Copy
-                                                </button>
-                                            </div>
-                                        </td>
-                                        <td className="py-2 text-slate-700">{item.propertyName || "-"}</td>
-                                        <td className="py-2 text-slate-700">{item.roomName || "-"}</td>
-                                        <td className="py-2 text-slate-700">{item.bedCode || "-"}</td>
-                                        <td className="py-2 text-slate-700">{item.checkInAt || "-"}</td>
-                                        <td className="py-2">
-                                            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${String(item.bookingStatus).toLowerCase() === "checked_in" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
-                                                {String(item.bookingStatus).toLowerCase() === "checked_in" ? "Checked In" : "Booked"}
-                                            </span>
-                                        </td>
-                                        <td className="py-2 text-slate-700">{getElapsedHours(item.checkInAt)} hr</td>
-                                        <td className="py-2">
-                                            {String(item.bookingStatus).toLowerCase() === "confirmed" ? (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleCheckInBooking(item.id)}
-                                                    disabled={!item.canCheckIn || checkInLoadingId === item.id}
-                                                    className="rounded-full border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
-                                                >
-                                                    {checkInLoadingId === item.id ? "Checking in..." : (item.canCheckIn ? "Check-In" : "Wait for time")}
-                                                </button>
-                                            ) : (
-                                                <button
-                                                    type="button"
-                                                    onClick={() => void handleCheckoutBooking(item.id)}
-                                                    disabled={checkoutLoadingId === item.id}
-                                                    className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60"
-                                                >
-                                                    {checkoutLoadingId === item.id ? "Checking out..." : "Checkout"}
-                                                </button>
-                                            )}
-                                        </td>
+            {user ? (
+                <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
+                    <h2 className="text-xl font-semibold">Live / Open Bookings</h2>
+                    <p className="mt-1 text-sm text-slate-500">Flow: Booked until check-in time, then Check-In, then Checkout at end of stay.</p>
+                    {loadingOpenBookings ? (
+                        <p className="mt-4 text-sm text-slate-500">Loading open bookings...</p>
+                    ) : openBookings.length === 0 ? (
+                        <p className="mt-4 text-sm text-slate-500">No open bookings currently.</p>
+                    ) : (
+                        <div className="mt-4 overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
+                                        <th className="pb-2 text-left font-semibold">Booking ID</th>
+                                        <th className="pb-2 text-left font-semibold">Property</th>
+                                        <th className="pb-2 text-left font-semibold">Room</th>
+                                        <th className="pb-2 text-left font-semibold">Bed</th>
+                                        <th className="pb-2 text-left font-semibold">Check-In</th>
+                                        <th className="pb-2 text-left font-semibold">Status</th>
+                                        <th className="pb-2 text-left font-semibold">Live Hours</th>
+                                        <th className="pb-2 text-left font-semibold">Action</th>
                                     </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </section>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {openBookings.map((item) => (
+                                        <tr key={item.id}>
+                                            <td className="py-2 font-mono text-xs text-slate-700">
+                                                <div className="flex items-center gap-2">
+                                                    <span>{item.bookingCode || item.id}</span>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleCopyBookingId(item.bookingCode, item.id)}
+                                                        className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-700 hover:bg-slate-50"
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                            </td>
+                                            <td className="py-2 text-slate-700">{item.propertyName || "-"}</td>
+                                            <td className="py-2 text-slate-700">{item.roomName || "-"}</td>
+                                            <td className="py-2 text-slate-700">{item.bedCode || "-"}</td>
+                                            <td className="py-2 text-slate-700">{item.checkInAt || "-"}</td>
+                                            <td className="py-2">
+                                                <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${String(item.bookingStatus).toLowerCase() === "checked_in" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
+                                                    {String(item.bookingStatus).toLowerCase() === "checked_in" ? "Checked In" : "Booked"}
+                                                </span>
+                                            </td>
+                                            <td className="py-2 text-slate-700">{getElapsedHours(item.checkInAt)} hr</td>
+                                            <td className="py-2">
+                                                {String(item.bookingStatus).toLowerCase() === "confirmed" ? (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleCheckInBooking(item.id)}
+                                                        disabled={!item.canCheckIn || checkInLoadingId === item.id}
+                                                        className="rounded-full border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                                    >
+                                                        {checkInLoadingId === item.id ? "Checking in..." : (item.canCheckIn ? "Check-In" : "Wait for time")}
+                                                    </button>
+                                                ) : (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => void handleCheckoutBooking(item.id)}
+                                                        disabled={checkoutLoadingId === item.id}
+                                                        className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                                    >
+                                                        {checkoutLoadingId === item.id ? "Checking out..." : "Checkout"}
+                                                    </button>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    )}
+                </section>
+            ) : null}
 
-            {selectedListing && (
+            {selectedListing ? (
                 <section ref={bookingSectionRef} className="glass-card animate-stagger mt-8 rounded-2xl p-6">
                     <h2 className="text-xl font-semibold">Book: {selectedListing.propertyName}</h2>
-                    <p className="mt-2 text-sm text-slate-600">Aadhaar is mandatory for booking. Checkout will be done later from Live/Open bookings.</p>
+                    <p className="mt-2 text-sm text-slate-600">
+                        {aadhaarRequiredForBooking
+                            ? "Aadhaar is mandatory from your second booking onward. Checkout will be done later from Live/Open bookings."
+                            : "First booking is easier: Aadhaar is optional for this booking. Checkout will be done later from Live/Open bookings."}
+                    </p>
 
-                    {hasSavedAadhaar && <p className="mt-2 text-xs text-slate-500">Saved Aadhaar on file: {maskAadhaar(profile?.aadhaarLast4 ?? "")}. Re-enter the full Aadhaar number to confirm this booking.</p>}
+                    {hasSavedAadhaar && aadhaarRequiredForBooking ? (
+                        <p className="mt-2 text-xs text-slate-500">Saved Aadhaar on file: {maskAadhaar(profile?.aadhaarLast4 ?? "")}. Re-enter the full Aadhaar number to confirm this booking.</p>
+                    ) : null}
 
                     <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={handleBooking}>
-                        <input value={aadhaarNumber} onChange={(event) => setAadhaarNumber(event.target.value)} placeholder="Aadhaar number (12 digits)" className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required />
+                        <input value={aadhaarNumber} onChange={(event) => setAadhaarNumber(event.target.value)} placeholder={aadhaarRequiredForBooking ? "Aadhaar number (12 digits)" : "Aadhaar number (optional for first booking)"} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required={aadhaarRequiredForBooking} />
 
                         <div>
                             <label className="mb-1 block text-xs font-semibold text-slate-600">Check-in</label>
@@ -394,7 +461,7 @@ export default function ConsumerPage() {
                         <button type="button" onClick={() => setSelectedListing(null)} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
                     </form>
                 </section>
-            )}
+            ) : null}
         </main>
         </ProtectedRoute>
     );
