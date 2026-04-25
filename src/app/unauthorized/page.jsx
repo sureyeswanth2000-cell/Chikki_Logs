@@ -1,11 +1,12 @@
 "use client";
 
+import { Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { dashboardPathByRole, roleLabel } from "@/types/roles";
 
-export default function UnauthorizedPage() {
+function UnauthorizedPageInner() {
   const params = useSearchParams();
   const { user, profile } = useAuth();
   const attemptedPath = params.get("from") || "";
@@ -57,5 +58,13 @@ export default function UnauthorizedPage() {
         </div>
       </section>
     </main>
+  );
+}
+
+export default function UnauthorizedPage() {
+  return (
+    <Suspense>
+      <UnauthorizedPageInner />
+    </Suspense>
   );
 }
