@@ -1,9 +1,9 @@
-name: Deploy GitHub Pages (test)
+name: Deploy GitHub Pages (main)
 
 on:
   push:
     branches:
-      - test
+      - main
   workflow_dispatch:
 
 permissions:
@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages-test
+  group: pages-main
   cancel-in-progress: true
 
 jobs:
