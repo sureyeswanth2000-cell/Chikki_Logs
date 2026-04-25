@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -51,7 +51,7 @@ function getElapsedHours(checkInAt) {
     return Math.max(1, Math.ceil((Date.now() - checkInMs) / (1000 * 60 * 60)));
 }
 
-export default function ConsumerPage() {
+function ConsumerPageInner() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { profile, user } = useAuth();
@@ -464,5 +464,13 @@ export default function ConsumerPage() {
             ) : null}
         </main>
         </ProtectedRoute>
+    );
+}
+
+export default function ConsumerPage() {
+    return (
+        <Suspense>
+            <ConsumerPageInner />
+        </Suspense>
     );
 }
