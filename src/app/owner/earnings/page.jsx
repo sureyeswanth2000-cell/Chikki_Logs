@@ -43,6 +43,12 @@ export default function OwnerEarningsPage() {
         paidAmount: 0,
         pendingAmount: 0,
     });
+    const [totalSummary, setTotalSummary] = useState({
+        bookingCount: 0,
+        expectedEarnings: 0,
+        paidAmount: 0,
+        pendingAmount: 0,
+    });
 
     async function handleLoadEarnings(event) {
         event.preventDefault();
@@ -58,8 +64,12 @@ export default function OwnerEarningsPage() {
         setLoading(true);
         setError(null);
         try {
-            const data = await getOwnerEarningsSummary(user.uid, range);
+            const [data, totalData] = await Promise.all([
+                getOwnerEarningsSummary(user.uid, range),
+                getOwnerEarningsSummary(user.uid, {}),
+            ]);
             setSummary(data);
+            setTotalSummary(totalData);
             setLoaded(true);
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : "Could not load earnings.");
@@ -121,18 +131,22 @@ export default function OwnerEarningsPage() {
                             Select today, week, month, or custom date and load earnings.
                         </div>
                     ) : (
-                        <div className="mt-6 grid gap-4 md:grid-cols-3">
+                        <div className="mt-6 grid gap-4 md:grid-cols-4">
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Earned / Expected</p>
-                                <p className="mt-2 text-3xl font-bold text-slate-900">{money(summary.expectedEarnings)}</p>
-                            </div>
-                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Paid / Settled</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Received</p>
                                 <p className="mt-2 text-3xl font-bold text-emerald-700">{money(summary.paidAmount)}</p>
                             </div>
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bookings</p>
-                                <p className="mt-2 text-3xl font-bold text-sky-700">{summary.bookingCount}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Expected</p>
+                                <p className="mt-2 text-3xl font-bold text-slate-900">{money(summary.expectedEarnings)}</p>
+                            </div>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Received</p>
+                                <p className="mt-2 text-3xl font-bold text-sky-700">{money(totalSummary.paidAmount)}</p>
+                            </div>
+                            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Bookings</p>
+                                <p className="mt-2 text-3xl font-bold text-slate-900">{totalSummary.bookingCount}</p>
                             </div>
                         </div>
                     )}
