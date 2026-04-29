@@ -13,6 +13,7 @@
   - added Add Property, Add Room, Add Bed, and Add All actions from owner inventory
   - added anchors on the create-inventory page so add actions can route to the right form section
   - expanded dark-mode overrides for shared cards, tables, forms, and fixed color utilities so text remains readable
+  - added root static export files with `.nojekyll` so GitHub Pages branch publishing can serve the app routes while the repository keeps one `main` branch
 
 ### Notes
 - Earnings currently show owner-facing expected/paid booking totals without exposing Chikki contribution or commission breakdown.

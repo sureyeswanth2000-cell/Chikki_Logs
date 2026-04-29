@@ -1,0 +1,4 @@
+:HL["/Chikki_Logs/_next/static/chunks/d745dd02277efb28.css","style"]
+:HL["/Chikki_Logs/_next/static/media/0c89a48fa5027cee-s.p.4564287c.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+:HL["/Chikki_Logs/_next/static/media/5c285b27cdda1fe8-s.p.a62025f2.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
+0:{"buildId":"WXdNtd2xhhTvCJ1HUC3rB","tree":{"name":"","paramType":null,"paramKey":"","hasRuntimePrefetch":false,"slots":{"children":{"name":"apply-owner","paramType":null,"paramKey":"apply-owner","hasRuntimePrefetch":false,"slots":{"children":{"name":"__PAGE__","paramType":null,"paramKey":"__PAGE__","hasRuntimePrefetch":false,"slots":null,"isRootLayout":false}},"isRootLayout":false}},"isRootLayout":true},"staleTime":300}
