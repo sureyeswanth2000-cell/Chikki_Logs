@@ -83,6 +83,7 @@
 - [x] Add full location-to-listing flow using automatic nearest-city or nearest-property logic
 - [ ] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
 - [ ] Add missing modify-booking option for existing bookings so consumers can change booking timing/details after creation when allowed by booking rules
+- [ ] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
 - [ ] Booking history should show how much the consumer paid / final amount due for each booking
 - [ ] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
 - [ ] Improve post-login return into the exact booking state, not only the consumer search context
@@ -93,6 +94,7 @@
 - [ ] Remove hardcoded default platform commission percentage from bed prices — operator/superadmin should set a per-owner revenue share percentage during owner onboarding or approval
 - [ ] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
+- [ ] Owner dashboard should show owner earnings/revenue received summaries by day, week, and month
 - [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
 - [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
@@ -107,6 +109,7 @@
 - [ ] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [ ] Improve overall UX across login, booking, and profile completion
+- [ ] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
 - [ ] Polish UI after flow stability is confirmed
 - [ ] Improve current-location UX so it feels intentional and premium
 - [ ] Add richer trust-forward listing presentation
@@ -156,6 +159,7 @@
 
 ## Bed Blocking & Extended Stay
 - [ ] Keep a booking open and the bed blocked until BOTH owner AND consumer have confirmed checkout — do not release the bed until both sides confirm
+- [ ] Owner should have simple manual bed block/unblock buttons without selecting start time, end time, property, room, and bed through a long flow
 - [ ] After the originally booked duration ends and the stay is extended, apply hourly pricing automatically — charge the owner's configured hourly rate per additional hour
 - [ ] Add operator-controlled toggle: "First-hour new-user pricing" — when enabled, charge a separately configured first-hour price for first-time users instead of the standard hourly rate; operator can enable or disable this per-property or globally
 - [ ] Add alert system: send an in-app notification (and optionally SMS/email) to the consumer when their booked time is about to expire, warning them to check out or extend
