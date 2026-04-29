@@ -83,6 +83,8 @@
 - [x] Add full location-to-listing flow using automatic nearest-city or nearest-property logic
 - [ ] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
 - [ ] Add missing modify-booking option for existing bookings so consumers can change booking timing/details after creation when allowed by booking rules
+- [ ] Booking history should show how much the consumer paid / final amount due for each booking
+- [ ] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
 - [ ] Improve post-login return into the exact booking state, not only the consumer search context
 - [ ] Verify owner-side visibility immediately after consumer booking across all booking states
 - [ ] Harden booking flow against all dead ends and partial-state failures
