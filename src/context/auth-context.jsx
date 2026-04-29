@@ -22,7 +22,7 @@ const AuthContext = createContext(null);
 
 const PROFILE_CACHE_KEY = "chikki_profile_cache";
 const OTP_COOLDOWN_UNTIL_KEY = "chikki_otp_cooldown_until";
-const OTP_SEND_COOLDOWN_SECONDS = 45;
+const OTP_SEND_COOLDOWN_SECONDS = 30;
 const OTP_RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60;
 const OTP_EXPIRY_SECONDS = 5 * 60;
 
@@ -184,20 +184,20 @@ function mapUserProfile(data) {
     const roleValue = typeof data.role === "string" ? data.role : "";
     if (!isUserRole(roleValue))
         return null;
-    const legacyDigits = typeof data.aadhaar === "string" ? data.aadhaar.replace(/\D/g, "") : "";
+    const aadhaarRefId = typeof data.aadhaarRefId === "string" ? data.aadhaarRefId.trim() : "";
     const aadhaarLast4 = typeof data.aadhaarLast4 === "string" && data.aadhaarLast4.trim().length > 0
         ? data.aadhaarLast4.trim().slice(-4)
-        : legacyDigits.length === 12
-            ? legacyDigits.slice(-4)
-            : "";
+        : "";
     return {
         role: roleValue,
         phoneNumber: typeof data.phoneNumber === "string" ? data.phoneNumber : "",
         name: typeof data.name === "string" ? data.name : "",
         email: typeof data.email === "string" ? data.email : "",
         address: typeof data.address === "string" ? data.address : "",
-        hasAadhaar: Boolean((typeof data.aadhaarHash === "string" && data.aadhaarHash) || aadhaarLast4),
+        hasAadhaar: Boolean(aadhaarRefId && aadhaarLast4),
+        aadhaarRefId,
         aadhaarLast4,
+        aadhaarStatus: typeof data.aadhaarStatus === "string" ? data.aadhaarStatus : "",
         createdAt: data.createdAt,
         updatedAt: data.updatedAt,
     };

@@ -47,7 +47,7 @@ service cloud.firestore {
 
     match /cities/{cityId} {
       allow read: if true;
-      allow write: if isSuperadmin();
+      allow write: if isInternalOperator();
     }
 
     match /users/{userId} {
@@ -62,6 +62,12 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['role', 'updatedAt']);
 
       allow delete: if false;
+    }
+
+    match /aadhaar_identity_vault/{refId} {
+      // Aadhaar vault access is backend-only. Client apps, including superadmin UI,
+      // must use audited Cloud Functions instead of direct Firestore reads/writes.
+      allow read, write: if false;
     }
 
     match /owner_applications/{appId} {
@@ -174,6 +180,11 @@ service cloud.firestore {
       allow create: if isSignedIn();
       allow read: if isInternalOperator();
       allow update, delete: if false;
+    }
+
+    match /platform_settings/{docId} {
+      allow read: if isInternalOperator();
+      allow write: if isSuperadmin();
     }
   }
 }

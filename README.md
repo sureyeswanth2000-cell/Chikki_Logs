@@ -2,6 +2,7 @@
 
 ## Canonical Product Documentation
 - Chikki Masterbook: [docs/CHIKKI_MASTERBOOK.md](./docs/CHIKKI_MASTERBOOK.md)
+- Auth test checklist: [docs/AUTH_TEST_CHECKLIST.md](./docs/AUTH_TEST_CHECKLIST.md)
 
 Website-first MVP for bed booking platform with three role views:
 - Consumer
@@ -33,6 +34,7 @@ Important:
 - `.env.local` is ignored by Git and will not be pushed.
 - `.env.example` is safe to commit and is only a template.
 - Keep production Firebase credentials out of tracked files.
+- After auth or routing changes, run the end-to-end auth checklist in `docs/AUTH_TEST_CHECKLIST.md`.
 
 For city seeding, also provide Firebase Admin credentials in .env.local:
 
@@ -41,6 +43,11 @@ For city seeding, also provide Firebase Admin credentials in .env.local:
 - FIREBASE_ADMIN_PRIVATE_KEY
 
 Note: Keep newline escapes in FIREBASE_ADMIN_PRIVATE_KEY as \n.
+
+For Aadhaar vault encryption, configure:
+
+- AADHAAR_VAULT_ENCRYPTION_KEY
+- AADHAAR_VAULT_KEY_VERSION
 
 4. Start development server:
 
@@ -53,6 +60,7 @@ Open http://localhost:3000
 ## Current Pages
 - / (landing)
 - /consumer
+- /booking
 - /owner
 - /operator
 
@@ -66,7 +74,7 @@ Run this command after .env.local is configured:
 npm run seed:cities
 ```
 
-This seeds 24 pilot cities into collection `cities`.
+This seeds 24 pilot cities with latitude, longitude, and service radius into collection `cities`.
 
 ## Superadmin Setup (Backend)
 
@@ -97,16 +105,22 @@ Credentials note for this app:
 
 ## Locked Business Rules in MVP
 - Cancellation allowed only within 15 minutes.
-- Aadhaar required only at booking step.
+- Aadhaar required from the second booking onward and stored only through the backend-only identity vault.
 - Advance payment INR 100.
 - Final total shown to user.
 - Payment gateway integration in later phase.
+- Browser location can choose the nearest service city and sort listings by nearest property.
+- Google Maps is used through directions links in the MVP, not paid Maps API calls.
 
 ## Completed Features (Non-Payment)
 - Role-based auth and protected routes (consumer/owner/operator/hidden-superadmin)
 - Owner inventory CRUD (properties, rooms, beds)
 - Bed block management with full-block option
-- Consumer city search, filters, and booking flow
+- Consumer city search, filters, dedicated booking step, and open-booking flow
+- Nearest-city location entry, nearest-property listing sort, meter/km distance display, and Google Maps directions links
+- Post-checkout booking-history ratings with bed rating summaries shown during search/booking
+- Aadhaar reference-ID vault: encrypted full Aadhaar in `aadhaar_identity_vault`, only reference ID/last-4/status on normal records
+- Superadmin break-glass Aadhaar reveal with mandatory reason, 60-second UI display, and audit log
 - Booking conflict checks and short booking lock to reduce double booking
 - Internal operator and superadmin consoles with audit-backed role control
 
@@ -121,8 +135,7 @@ firebase deploy --only firestore:rules
 ```
 
 ## Next Implementation Targets
-- Firebase auth flow by role
-- Firestore collections for cities, properties, rooms, beds, bookings
-- City-based listing and filter search
-- Owner inventory and bed blocking workflows
+- Manual end-to-end auth verification for every role
+- Production MFA/second-approval guard for Aadhaar break-glass reveal
+- Production payment gateway integration
 - Superadmin live KPI cards

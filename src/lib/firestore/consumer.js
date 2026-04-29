@@ -1,7 +1,8 @@
 import { addDoc, collection, doc, getDoc, getDocs, query, runTransaction, serverTimestamp, updateDoc, where, } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
-import { completeCheckout, createBookingWithAdvance as createBookingWithAdvanceCallable } from "@/lib/cloud/security";
+import { completeCheckout, createBookingWithAdvance as createBookingWithAdvanceCallable, submitBookingRating as submitBookingRatingCallable } from "@/lib/cloud/security";
+import { distanceKmBetween } from "@/lib/geo";
 import pilotCities from "../../../data/pilot-cities.json";
 function toTime(value) {
     const parsed = new Date(value).getTime();
@@ -116,6 +117,15 @@ function isOngoingBooking(booking) {
     return checkInMs <= now && now <= checkOutMs;
 }
 
+function staticCityMeta(cityId, name) {
+    const normalizedId = String(cityId ?? "").trim().toLowerCase();
+    const normalizedName = String(name ?? "").trim().toLowerCase();
+    return pilotCities.find((item) =>
+        item.name.trim().toLowerCase().replace(/\s+/g, "-") === normalizedId ||
+        item.name.trim().toLowerCase() === normalizedName
+    ) ?? {};
+}
+
 export async function getConsumerBookingHistory(userId, filters = {}) {
     if (!userId) {
         throw new Error("Please login first.");
@@ -136,25 +146,43 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             checkOutAt: String(data.checkOutAt ?? ""),
             bookingStatus: String(data.bookingStatus ?? ""),
             duration: String(data.duration ?? ""),
+            ratingOverall: Number(data.ratingOverall ?? 0),
+            ratingComment: String(data.ratingComment ?? ""),
+            ratingSubmittedAt: data.ratingSubmittedAt ?? null,
             createdAt: data.createdAt,
         };
     });
 
     const uniquePropertyIds = [...new Set(rawBookings.map((item) => item.propertyId).filter(Boolean))];
+    const uniqueBedIds = [...new Set(rawBookings.map((item) => item.bedId).filter(Boolean))];
     const propertyMap = {};
+    const bedMap = {};
 
-    await Promise.all(uniquePropertyIds.map(async (propertyId) => {
-        const snap = await getDoc(doc(db, COLLECTIONS.properties, propertyId));
-        if (!snap.exists()) {
-            propertyMap[propertyId] = { cityName: "", propertyName: "" };
-            return;
-        }
-        const data = snap.data();
-        propertyMap[propertyId] = {
-            cityName: String(data.cityName ?? ""),
-            propertyName: String(data.name ?? ""),
-        };
-    }));
+    await Promise.all([
+        ...uniquePropertyIds.map(async (propertyId) => {
+            const snap = await getDoc(doc(db, COLLECTIONS.properties, propertyId));
+            if (!snap.exists()) {
+                propertyMap[propertyId] = { cityName: "", propertyName: "" };
+                return;
+            }
+            const data = snap.data();
+            propertyMap[propertyId] = {
+                cityName: String(data.cityName ?? ""),
+                propertyName: String(data.name ?? ""),
+            };
+        }),
+        ...uniqueBedIds.map(async (bedId) => {
+            const snap = await getDoc(doc(db, COLLECTIONS.beds, bedId));
+            if (!snap.exists()) {
+                bedMap[bedId] = { bedCode: "" };
+                return;
+            }
+            const data = snap.data();
+            bedMap[bedId] = {
+                bedCode: String(data.bedCode ?? ""),
+            };
+        }),
+    ]);
 
     const enriched = rawBookings.map((item) => {
         const propertyInfo = propertyMap[item.propertyId] ?? { cityName: "", propertyName: "" };
@@ -165,6 +193,10 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             ...item,
             cityName: propertyInfo.cityName,
             propertyName: propertyInfo.propertyName,
+            bedCode: bedMap[item.bedId]?.bedCode ?? "",
+            ratingOverall: Number(item.ratingOverall ?? 0),
+            ratingComment: String(item.ratingComment ?? ""),
+            ratingSubmittedAt: item.ratingSubmittedAt ?? null,
             checkInMs,
             checkOutMs,
             bucket: ongoing ? "ongoing" : "old",
@@ -228,14 +260,20 @@ export async function getActiveCities() {
     try {
         const q = query(collection(db, COLLECTIONS.cities));
         const snapshot = await getDocs(q);
-        const cities = snapshot.docs.map((item) => {
+        const cities = snapshot.docs
+            .filter((item) => item.id !== "_platform_cfg")
+            .map((item) => {
             const data = item.data();
+            const fallback = staticCityMeta(item.id, data.name);
             return {
                 id: item.id,
                 name: String(data.name ?? ""),
                 state: String(data.state ?? ""),
+                lat: Number(data.lat ?? fallback.lat ?? 0),
+                lng: Number(data.lng ?? fallback.lng ?? 0),
+                serviceRadiusKm: Number(data.serviceRadiusKm ?? fallback.serviceRadiusKm ?? 80),
             };
-        });
+        }).filter((city) => city.name);
         if (cities.length > 0) {
             return cities.sort((a, b) => a.name.localeCompare(b.name));
         }
@@ -250,10 +288,14 @@ export async function getActiveCities() {
             if (!cityId || !cityName || byId.has(cityId)) {
                 return;
             }
+            const fallback = staticCityMeta(cityId, cityName);
             byId.set(cityId, {
                 id: cityId,
                 name: cityName,
                 state: String(data.cityState ?? ""),
+                lat: Number(data.lat ?? fallback.lat ?? 0),
+                lng: Number(data.lng ?? fallback.lng ?? 0),
+                serviceRadiusKm: Number(fallback.serviceRadiusKm ?? 80),
             });
         });
         if (byId.size > 0) {
@@ -269,10 +311,26 @@ export async function getActiveCities() {
         id: item.name.trim().toLowerCase().replace(/\s+/g, "-"),
         name: String(item.name ?? ""),
         state: String(item.state ?? ""),
+        lat: Number(item.lat ?? 0),
+        lng: Number(item.lng ?? 0),
+        serviceRadiusKm: Number(item.serviceRadiusKm ?? 80),
     }));
     return staticCities.sort((a, b) => a.name.localeCompare(b.name));
 }
 export async function getListingsByCity(filters) {
+    const userLocation = {
+        lat: Number(filters.userLat),
+        lng: Number(filters.userLng),
+    };
+    const hasUserLocation = Number.isFinite(userLocation.lat) && Number.isFinite(userLocation.lng);
+    const citySnap = await getDoc(doc(db, COLLECTIONS.cities, filters.cityId));
+    const cityData = citySnap.exists() ? citySnap.data() : {};
+    const scarcityEnabled = Boolean(cityData?.scarcityEnabled);
+    const rawScarcityValue = Number(cityData?.scarcityValue ?? 0);
+    const scarcityValue = Number.isFinite(rawScarcityValue)
+        ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
+        : 0;
+
     const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
     const propertySnapshot = await getDocs(propertiesQuery);
     const properties = propertySnapshot.docs.map((item) => {
@@ -316,6 +374,8 @@ export async function getListingsByCity(filters) {
                 hourlyPrice: Number(data.hourlyPrice ?? 120),
                 overnightPrice: Number(data.overnightPrice ?? 650),
                 overdayPrice: Number(data.overdayPrice ?? 900),
+                ratingAverage: Number(data.ratingAverage ?? 0),
+                ratingCount: Number(data.ratingCount ?? 0),
                 active: Boolean(data.active),
             };
         })
@@ -356,6 +416,8 @@ export async function getListingsByCity(filters) {
             hourlyPrice: bed.hourlyPrice,
             overnightPrice: bed.overnightPrice,
             overdayPrice: bed.overdayPrice,
+            ratingAverage: bed.ratingAverage,
+            ratingCount: bed.ratingCount,
         }));
         const filteredBedOptions = filters.bedFilter === "all"
             ? bedOptions
@@ -368,10 +430,34 @@ export async function getListingsByCity(filters) {
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
         })));
+        const hourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {
+            hourlyPrice: item.hourlyPrice,
+            overnightPrice: item.overnightPrice,
+            overdayPrice: item.overdayPrice,
+        }));
+        const overnightPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("overnight", item.bedType, {
+            hourlyPrice: item.hourlyPrice,
+            overnightPrice: item.overnightPrice,
+            overdayPrice: item.overdayPrice,
+        }));
         const minFinalPrice = Math.min(...priceCandidates);
+        const minHourlyPrice = Math.min(...hourlyPriceCandidates);
+        const minOvernightPrice = Math.min(...overnightPriceCandidates);
         if (filters.maxFinalPrice && minFinalPrice > filters.maxFinalPrice) {
             continue;
         }
+        const distanceFromUserKm = hasUserLocation
+            ? distanceKmBetween(userLocation, { lat: property.lat, lng: property.lng })
+            : null;
+        const realAvailableBeds = filteredBedOptions.length;
+        const ratedBeds = filteredBedOptions.filter((item) => Number(item.ratingCount ?? 0) > 0);
+        const totalRatingCount = ratedBeds.reduce((total, item) => total + Number(item.ratingCount ?? 0), 0);
+        const totalRatingValue = ratedBeds.reduce((total, item) => total + (Number(item.ratingAverage ?? 0) * Number(item.ratingCount ?? 0)), 0);
+        const listingRatingAverage = totalRatingCount > 0 ? Math.round((totalRatingValue / totalRatingCount) * 10) / 10 : 0;
+        const shownAvailableBeds = scarcityEnabled && scarcityValue > 0
+            ? Math.min(realAvailableBeds, scarcityValue)
+            : realAvailableBeds;
+
         listings.push({
             propertyId: property.id,
             propertyName: property.name,
@@ -381,14 +467,30 @@ export async function getListingsByCity(filters) {
             lng: property.lng,
             nearRailwayKm: property.nearRailwayKm,
             nearBusKm: property.nearBusKm,
-            availableBeds: filteredBedOptions.length,
+            distanceFromUserKm,
+            availableBeds: realAvailableBeds,
+            shownAvailableBeds,
+            scarcityApplied: scarcityEnabled && shownAvailableBeds < realAvailableBeds,
             acBeds: filteredBedOptions.filter((item) => item.bedType === "AC").length,
             nonAcBeds: filteredBedOptions.filter((item) => item.bedType === "NON_AC").length,
             minFinalPrice,
+            minHourlyPrice,
+            minOvernightPrice,
+            ratingAverage: listingRatingAverage,
+            ratingCount: totalRatingCount,
             bedOptions: filteredBedOptions,
         });
     }
-    return listings.sort((a, b) => a.minFinalPrice - b.minFinalPrice);
+    return listings.sort((a, b) => {
+        if (hasUserLocation) {
+            const distanceA = Number.isFinite(Number(a.distanceFromUserKm)) ? Number(a.distanceFromUserKm) : Number.POSITIVE_INFINITY;
+            const distanceB = Number.isFinite(Number(b.distanceFromUserKm)) ? Number(b.distanceFromUserKm) : Number.POSITIVE_INFINITY;
+            if (distanceA !== distanceB) {
+                return distanceA - distanceB;
+            }
+        }
+        return a.minFinalPrice - b.minFinalPrice;
+    });
 }
 export async function createBookingWithAdvance(payload) {
     const result = await createBookingWithAdvanceCallable(payload);
@@ -545,5 +647,19 @@ export async function checkoutOpenBooking(payload) {
         advancePaid: Number(summary.advancePaid ?? 0),
         remainingPaid: Number(summary.remainingPaid ?? 0),
         checkOutAt: String(summary.checkOutAt ?? ""),
+    };
+}
+
+export async function submitBookingRating(payload) {
+    const result = await submitBookingRatingCallable(payload);
+    if (!result || !result.bookingId) {
+        throw new Error("Could not submit rating.");
+    }
+    return {
+        bookingId: String(result.bookingId),
+        bookingCode: String(result.bookingCode || result.bookingId),
+        ratingOverall: Number(result.ratingOverall ?? 0),
+        bedRatingAverage: Number(result.bedRatingAverage ?? 0),
+        bedRatingCount: Number(result.bedRatingCount ?? 0),
     };
 }

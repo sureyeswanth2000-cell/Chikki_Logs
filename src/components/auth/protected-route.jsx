@@ -3,9 +3,16 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 
-function unauthorizedHref(pathname) {
-    const next = encodeURIComponent(pathname || "/");
+function unauthorizedHref(currentPath) {
+    const next = encodeURIComponent(currentPath || "/");
     return `/unauthorized?from=${next}`;
+}
+
+function currentHref(pathname) {
+    if (typeof window === "undefined") {
+        return pathname || "/";
+    }
+    return `${pathname || "/"}${window.location.search || ""}`;
 }
 
 export function ProtectedRoute({ children, allowedRoles }) {
@@ -16,7 +23,8 @@ export function ProtectedRoute({ children, allowedRoles }) {
 
     useEffect(() => {
         if (!loading && !user) {
-            const next = encodeURIComponent(pathname || "/");
+            const currentPath = currentHref(pathname);
+            const next = encodeURIComponent(currentPath);
             router.replace(`/login?next=${next}`);
         }
     }, [loading, user, pathname, router]);
@@ -31,13 +39,15 @@ export function ProtectedRoute({ children, allowedRoles }) {
     useEffect(() => {
         if (!profileTimeout) return;
         if (!profile || !allowedRoles.includes(profile.role)) {
-            router.replace(unauthorizedHref(pathname));
+            const currentPath = currentHref(pathname);
+            router.replace(unauthorizedHref(currentPath));
         }
     }, [profileTimeout, profile, allowedRoles, pathname, router]);
 
     useEffect(() => {
         if (!loading && user && profile && !allowedRoles.includes(profile.role)) {
-            router.replace(unauthorizedHref(pathname));
+            const currentPath = currentHref(pathname);
+            router.replace(unauthorizedHref(currentPath));
         }
     }, [loading, user, profile, allowedRoles, pathname, router]);
 

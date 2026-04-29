@@ -256,7 +256,7 @@ function ProfileContent() {
                         )}
 
                         <p className="text-xs text-slate-500">
-                            Aadhaar is stored as secure metadata only and masked in display. Required at booking stage.
+                            Aadhaar is stored in the protected identity vault. Normal profile and booking records keep only the reference ID and masked last 4 digits.
                         </p>
 
                         <div className="flex gap-3 pt-2">

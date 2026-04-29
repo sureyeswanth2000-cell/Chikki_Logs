@@ -9,11 +9,16 @@ import {
   deleteCity,
   getCitiesWithOwners,
   getDashboardMetrics,
+  getGrowthStats,
   getOwnerApplications,
+  getPlatformSettings,
   rejectOwnerApplication,
+  revealAadhaarForInvestigation,
   searchUserByPhone,
+  setCityScarcityMode,
   updateCity,
   updateManagedUserRole,
+  updatePlatformSettings,
 } from "@/lib/firestore/superadmin";
 
 const superadminRoleOptions = [
@@ -32,7 +37,8 @@ function MetricCard({ label, value }) {
   );
 }
 
-function CityRow({ city, onEdit, onDelete }) {
+function CityRow({ city, onEdit, onDisable, onToggleScarcity, scarcitySavingCityId }) {
+  const scarcityActive = Boolean(city.scarcityEnabled);
   return (
     <tr className="border-b border-slate-100 hover:bg-slate-50 transition-colors">
       <td className="py-3 px-4 font-medium text-slate-800">{city.name}</td>
@@ -48,6 +54,17 @@ function CityRow({ city, onEdit, onDelete }) {
         </span>
       </td>
       <td className="py-3 px-4">
+        {scarcityActive ? (
+          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+            ON (up to {city.scarcityValue || 1})
+          </span>
+        ) : (
+          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+            Off
+          </span>
+        )}
+      </td>
+      <td className="py-3 px-4">
         <div className="flex gap-2">
           <button
             type="button"
@@ -56,12 +73,38 @@ function CityRow({ city, onEdit, onDelete }) {
           >
             Edit
           </button>
+          {city.active ? (
+            <button
+              type="button"
+              onClick={() => onDisable(city)}
+              className="rounded px-2 py-1 text-xs font-semibold text-rose-600 ring-1 ring-rose-200 hover:bg-rose-50"
+            >
+              Disable
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onDisable(city)}
+              className="rounded px-2 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50"
+            >
+              Enable
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => onDelete(city)}
-            className="rounded px-2 py-1 text-xs font-semibold text-rose-600 ring-1 ring-rose-200 hover:bg-rose-50"
+            disabled={scarcitySavingCityId === city.id}
+            onClick={() => onToggleScarcity(city)}
+            className={`rounded px-2 py-1 text-xs font-semibold ring-1 disabled:opacity-60 ${
+              scarcityActive
+                ? "text-amber-700 ring-amber-200 hover:bg-amber-50"
+                : "text-emerald-700 ring-emerald-200 hover:bg-emerald-50"
+            }`}
           >
-            Delete
+            {scarcitySavingCityId === city.id
+              ? "Saving..."
+              : scarcityActive
+                ? "Disable Scarcity"
+                : "Enable Scarcity"}
           </button>
         </div>
       </td>
@@ -90,6 +133,25 @@ export default function InternalControlPage() {
   const [applications, setApplications] = useState([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsNotice, setAppsNotice] = useState(null);
+  const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState(null);
+  const [settingsNotice, setSettingsNotice] = useState(null);
+  const [scarcitySavingCityId, setScarcitySavingCityId] = useState("");
+  const [growthStats, setGrowthStats] = useState(null);
+  const [growthLoading, setGrowthLoading] = useState(false);
+  const [growthError, setGrowthError] = useState(null);
+  const [identityForm, setIdentityForm] = useState({
+    aadhaarRefId: "",
+    targetUserId: "",
+    bookingId: "",
+    reason: "",
+  });
+  const [identityLoading, setIdentityLoading] = useState(false);
+  const [identityError, setIdentityError] = useState(null);
+  const [identityResult, setIdentityResult] = useState(null);
+  const [identityCountdown, setIdentityCountdown] = useState(0);
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true);
@@ -126,11 +188,52 @@ export default function InternalControlPage() {
     }
   }, []);
 
+  const loadSettings = useCallback(async () => {
+    setSettingsLoading(true);
+    setSettingsError(null);
+    try {
+      const settings = await getPlatformSettings();
+      setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "Could not load platform settings.");
+    } finally {
+      setSettingsLoading(false);
+    }
+  }, []);
+
+  const loadGrowth = useCallback(async () => {
+    setGrowthLoading(true);
+    setGrowthError(null);
+    try {
+      setGrowthStats(await getGrowthStats());
+    } catch (error) {
+      setGrowthError(error instanceof Error ? error.message : "Could not load growth data.");
+    } finally {
+      setGrowthLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadMetrics();
     void loadCities();
     void loadApplications();
-  }, [loadApplications, loadCities, loadMetrics]);
+    void loadSettings();
+    void loadGrowth();
+  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings]);
+
+  useEffect(() => {
+    if (!identityResult || identityCountdown <= 0) return undefined;
+    const timer = window.setTimeout(() => {
+      setIdentityCountdown((current) => Math.max(0, current - 1));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [identityCountdown, identityResult]);
+
+  useEffect(() => {
+    if (identityResult && identityCountdown === 0) {
+      setIdentityResult(null);
+    }
+  }, [identityCountdown, identityResult]);
 
   function startAddCity() {
     setEditingCity(null);
@@ -149,6 +252,18 @@ export default function InternalControlPage() {
   async function handleSaveCity() {
     if (!cityForm.name.trim() || !cityForm.state.trim()) {
       setCityError("City name and state are required.");
+      return;
+    }
+
+    // Duplicate check — same name + state (case-insensitive), excluding the city being edited
+    const duplicate = cities.find(
+      (c) =>
+        c.name.trim().toLowerCase() === cityForm.name.trim().toLowerCase() &&
+        c.state.trim().toLowerCase() === cityForm.state.trim().toLowerCase() &&
+        c.id !== editingCity?.id
+    );
+    if (duplicate) {
+      setCityError(`"${cityForm.name.trim()}, ${cityForm.state.trim()}" already exists.`);
       return;
     }
 
@@ -171,20 +286,73 @@ export default function InternalControlPage() {
     }
   }
 
-  async function handleDeleteCity(city) {
-    if (!window.confirm(`Delete city "${city.name}"? This cannot be undone.`)) {
-      return;
-    }
+  async function handleDisableCity(city) {
+    const action = city.active ? "disable" : "enable";
+    const message = city.active
+      ? `Disable "${city.name}"? It will no longer appear to consumers.`
+      : `Enable "${city.name}"? It will become visible to consumers again.`;
+    if (!window.confirm(message)) return;
 
     setSavingCity(true);
     setCityError(null);
     try {
-      await deleteCity(city.id);
+      await updateCity(city.id, { name: city.name, state: city.state, active: !city.active });
       await loadCities();
     } catch (error) {
-      setCityError(error instanceof Error ? error.message : "Could not delete city.");
+      setCityError(error instanceof Error ? error.message : `Could not ${action} city.`);
     } finally {
       setSavingCity(false);
+    }
+  }
+
+  async function handleToggleCityScarcity(city) {
+    if (city.scarcityEnabled) {
+      const confirmed = window.confirm(
+        `Disable safe scarcity for "${city.name}"? Consumers will see the real bed count.`
+      );
+      if (!confirmed) return;
+    }
+    setCityError(null);
+    setScarcitySavingCityId(city.id);
+    try {
+      const result = await setCityScarcityMode({
+        cityId: city.id,
+        enabled: !city.scarcityEnabled,
+      });
+      setCities((prev) =>
+        prev.map((item) =>
+          item.id === city.id
+            ? {
+                ...item,
+                scarcityEnabled: result.scarcityEnabled,
+                scarcityValue: result.scarcityValue,
+                scarcityUpdatedAtMs: Date.now(),
+              }
+            : item
+        )
+      );
+    } catch (error) {
+      setCityError(error instanceof Error ? error.message : "Could not update scarcity mode.");
+    } finally {
+      setScarcitySavingCityId("");
+    }
+  }
+
+  async function handleSaveSettings(event) {
+    event.preventDefault();
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setSettingsNotice(null);
+    try {
+      const next = await updatePlatformSettings({
+        checkInGraceMinutes,
+      });
+      setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
+      setSettingsNotice("Platform timeout updated successfully.");
+    } catch (error) {
+      setSettingsError(error instanceof Error ? error.message : "Could not save platform settings.");
+    } finally {
+      setSettingsSaving(false);
     }
   }
 
@@ -228,6 +396,49 @@ export default function InternalControlPage() {
     }
   }
 
+  async function handleRevealAadhaar(event) {
+    event.preventDefault();
+    setIdentityError(null);
+    setIdentityResult(null);
+    setIdentityCountdown(0);
+
+    const reason = identityForm.reason.trim();
+    if (reason.length < 20) {
+      setIdentityError("Enter a detailed reason with at least 20 characters.");
+      return;
+    }
+    if (!identityForm.aadhaarRefId.trim() && !identityForm.targetUserId.trim() && !identityForm.bookingId.trim()) {
+      setIdentityError("Enter Aadhaar reference ID, target user ID, or booking ID.");
+      return;
+    }
+
+    setIdentityLoading(true);
+    try {
+      const result = await revealAadhaarForInvestigation({
+        aadhaarRefId: identityForm.aadhaarRefId.trim(),
+        targetUserId: identityForm.targetUserId.trim(),
+        bookingId: identityForm.bookingId.trim(),
+        reason,
+      });
+      setIdentityResult(result);
+      setIdentityCountdown(Number(result?.revealExpiresInSeconds ?? 60));
+    } catch (error) {
+      setIdentityError(error instanceof Error ? error.message : "Could not reveal Aadhaar.");
+    } finally {
+      setIdentityLoading(false);
+    }
+  }
+
+  function fillIdentityFromSearchResult() {
+    if (!searchResult) return;
+    setIdentityForm((current) => ({
+      ...current,
+      aadhaarRefId: searchResult.aadhaarRefId || current.aadhaarRefId,
+      targetUserId: searchResult.id || current.targetUserId,
+    }));
+    setActiveTab("identity");
+  }
+
   async function handleApproveApplication(application) {
     if (!window.confirm(`Approve "${application.businessName}" and promote them to Owner?`)) {
       return;
@@ -235,7 +446,11 @@ export default function InternalControlPage() {
     setAppsNotice(null);
     try {
       await approveOwnerApplication(application.id, application.userId);
-      setApplications((prev) => prev.filter((item) => item.id !== application.id));
+      setApplications((prev) =>
+        prev.map((item) =>
+          item.id === application.id ? { ...item, _status: "approved" } : item
+        )
+      );
       setAppsNotice(`${application.businessName} was approved and promoted to Owner.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Approval failed.");
@@ -249,7 +464,11 @@ export default function InternalControlPage() {
     setAppsNotice(null);
     try {
       await rejectOwnerApplication(application.id);
-      setApplications((prev) => prev.filter((item) => item.id !== application.id));
+      setApplications((prev) =>
+        prev.map((item) =>
+          item.id === application.id ? { ...item, _status: "rejected" } : item
+        )
+      );
       setAppsNotice(`${application.businessName} was rejected.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Rejection failed.");
@@ -276,7 +495,10 @@ export default function InternalControlPage() {
         <div className="mt-6 flex flex-wrap gap-2 border-b border-slate-200">
           {[
             { id: "overview", label: "Overview" },
+            { id: "growth", label: "Growth" },
+            { id: "settings", label: "Platform Settings" },
             { id: "roles", label: "Role Control" },
+            { id: "identity", label: "Identity Access" },
             { id: "cities", label: "Cities" },
             { id: "applications", label: "Applications" },
           ].map((tab) => (
@@ -312,6 +534,146 @@ export default function InternalControlPage() {
             ) : (
               <p className="mt-3 text-sm text-slate-500">Metrics are currently unavailable.</p>
             )}
+          </section>
+        ) : null}
+
+        {activeTab === "growth" ? (
+          <section className="mt-6">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Growth Dashboard</h2>
+                <p className="mt-1 text-sm text-slate-500">7-day booking trend and all-time city breakdown.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadGrowth()}
+                className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {growthError ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{growthError}</div>
+            ) : null}
+
+            {growthLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading growth data...</p>
+            ) : growthStats ? (
+              <>
+                {/* 7-day trend */}
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="mb-4 text-sm font-bold uppercase tracking-wide text-slate-500">Bookings — Last 7 Days</h3>
+                  {(() => {
+                    const maxBookings = Math.max(...growthStats.dailyTrend.map((d) => d.bookings), 1);
+                    return (
+                      <div className="flex items-end gap-2 h-36">
+                        {growthStats.dailyTrend.map((day) => {
+                          const pct = Math.round((day.bookings / maxBookings) * 100);
+                          const label = new Date(day.date + "T00:00:00").toLocaleDateString("en-IN", { weekday: "short", day: "numeric" });
+                          return (
+                            <div key={day.date} className="flex flex-1 flex-col items-center gap-1">
+                              <span className="text-xs font-semibold text-slate-700">{day.bookings || ""}</span>
+                              <div className="w-full flex items-end" style={{ height: "80px" }}>
+                                <div
+                                  className="w-full rounded-t-md bg-indigo-500 transition-all"
+                                  style={{ height: `${pct}%`, minHeight: day.bookings ? "4px" : "2px", opacity: day.bookings ? 1 : 0.15 }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-slate-400 text-center leading-tight">{label}</span>
+                              {day.gross > 0 ? (
+                                <span className="text-[10px] text-emerald-600 font-medium">₹{day.gross}</span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* City breakdown */}
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-5">
+                  <h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">All-Time City Breakdown</h3>
+                  {growthStats.cityBreakdown.length === 0 ? (
+                    <p className="text-sm italic text-slate-400">No booking data yet.</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-xl ring-1 ring-slate-200">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          <tr>
+                            <th className="px-4 py-3 text-left">#</th>
+                            <th className="px-4 py-3 text-left">City</th>
+                            <th className="px-4 py-3 text-right">Total Bookings</th>
+                            <th className="px-4 py-3 text-right">Gross Revenue (INR)</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {growthStats.cityBreakdown.map((city, index) => (
+                            <tr key={city.name} className="hover:bg-slate-50">
+                              <td className="px-4 py-3 text-slate-400 font-medium">{index + 1}</td>
+                              <td className="px-4 py-3 font-medium text-slate-800">{city.name}</td>
+                              <td className="px-4 py-3 text-right text-slate-700">{city.bookings}</td>
+                              <td className="px-4 py-3 text-right text-emerald-700 font-semibold">
+                                {city.gross > 0 ? `₹${city.gross.toLocaleString("en-IN")}` : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <p className="mt-4 text-sm italic text-slate-400">No growth data available yet.</p>
+            )}
+          </section>
+        ) : null}
+
+        {activeTab === "settings" ? (
+          <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-slate-800">Platform Settings</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Only superadmin can change no-check-in timeout. This directly controls auto-cancel and bed unlock behavior.
+            </p>
+
+            {settingsError ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {settingsError}
+              </div>
+            ) : null}
+            {settingsNotice ? (
+              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                {settingsNotice}
+              </div>
+            ) : null}
+
+            {settingsLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading platform settings...</p>
+            ) : null}
+            <form className="mt-4 flex flex-col gap-3 md:flex-row md:items-end" onSubmit={handleSaveSettings}>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Check-in grace timeout (minutes)
+                </label>
+                <input
+                  type="number"
+                  min={5}
+                  max={120}
+                  value={checkInGraceMinutes}
+                  onChange={(event) => setCheckInGraceMinutes(Number(event.target.value || 15))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={settingsSaving || settingsLoading}
+                className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+              >
+                {settingsSaving ? "Saving..." : "Save Timeout"}
+              </button>
+            </form>
           </section>
         ) : null}
 
@@ -394,6 +756,124 @@ export default function InternalControlPage() {
                     Existing superadmin accounts are locked from UI changes and must be edited only from the database side.
                   </p>
                 ) : null}
+                {searchResult.aadhaarRefId ? (
+                  <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-sm font-semibold text-amber-800">
+                      Aadhaar reference: {searchResult.aadhaarRefId}
+                    </p>
+                    <p className="mt-1 text-xs text-amber-700">
+                      Masked display: XXXX XXXX {searchResult.aadhaarLast4 || "----"} | Status: {searchResult.aadhaarStatus || "submitted"}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={fillIdentityFromSearchResult}
+                      className="mt-3 rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                    >
+                      Open Break-Glass Form
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {activeTab === "identity" ? (
+          <section className="mt-6 rounded-2xl border border-amber-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-slate-800">Identity Break-Glass Access</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Reveal full Aadhaar only for legal, security, fraud, or serious support cases. Every reveal is permanently audited.
+            </p>
+
+            {identityError ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {identityError}
+              </div>
+            ) : null}
+
+            <form className="mt-4 grid gap-3" onSubmit={(event) => void handleRevealAadhaar(event)}>
+              <div className="grid gap-3 md:grid-cols-3">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Aadhaar Ref ID
+                  </label>
+                  <input
+                    value={identityForm.aadhaarRefId}
+                    onChange={(event) => setIdentityForm((current) => ({ ...current, aadhaarRefId: event.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-amber-400"
+                    placeholder="uuid reference"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Target User ID
+                  </label>
+                  <input
+                    value={identityForm.targetUserId}
+                    onChange={(event) => setIdentityForm((current) => ({ ...current, targetUserId: event.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-amber-400"
+                    placeholder="Firebase UID"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Booking ID
+                  </label>
+                  <input
+                    value={identityForm.bookingId}
+                    onChange={(event) => setIdentityForm((current) => ({ ...current, bookingId: event.target.value }))}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-amber-400"
+                    placeholder="booking document id"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Reason
+                </label>
+                <textarea
+                  value={identityForm.reason}
+                  onChange={(event) => setIdentityForm((current) => ({ ...current, reason: event.target.value }))}
+                  className="min-h-24 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-amber-400"
+                  placeholder="Example: Police complaint verification for booking incident..."
+                  required
+                />
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="submit"
+                  disabled={identityLoading}
+                  className="rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                >
+                  {identityLoading ? "Revealing..." : "Reveal Aadhaar"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIdentityResult(null);
+                    setIdentityCountdown(0);
+                  }}
+                  className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Clear Reveal
+                </button>
+              </div>
+            </form>
+
+            {identityResult ? (
+              <div className="mt-5 rounded-xl border border-amber-300 bg-amber-50 p-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-800">
+                  Break-glass reveal active for {identityCountdown}s
+                </p>
+                <p className="mt-3 font-mono text-2xl font-bold tracking-widest text-slate-900">
+                  {identityResult.aadhaar}
+                </p>
+                <p className="mt-2 text-xs text-slate-600">
+                  Ref: {identityResult.aadhaarRefId} | User: {identityResult.targetUserId || "-"}
+                </p>
+                <p className="mt-2 text-xs font-semibold text-amber-800">
+                  This reveal has been written to audit logs. Do not copy it into tickets, chats, notes, or other records.
+                </p>
               </div>
             ) : null}
           </section>
@@ -428,7 +908,7 @@ export default function InternalControlPage() {
                 <h3 className="mb-3 font-semibold text-indigo-800">
                   {editingCity ? `Edit ${editingCity.name}` : "Add New City"}
                 </h3>
-                <div className="grid gap-3 sm:grid-cols-3">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-xs font-semibold text-slate-600">City Name</label>
                     <input
@@ -444,17 +924,6 @@ export default function InternalControlPage() {
                       value={cityForm.state}
                       onChange={(event) => setCityForm((current) => ({ ...current, state: event.target.value }))}
                     />
-                  </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold text-slate-600">Status</label>
-                    <select
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400"
-                      value={cityForm.active ? "active" : "inactive"}
-                      onChange={(event) => setCityForm((current) => ({ ...current, active: event.target.value === "active" }))}
-                    >
-                      <option value="active">Active</option>
-                      <option value="inactive">Inactive</option>
-                    </select>
                   </div>
                 </div>
                 <div className="mt-3 flex gap-2">
@@ -492,13 +961,14 @@ export default function InternalControlPage() {
                       <th className="px-4 py-3 text-left">State</th>
                       <th className="px-4 py-3 text-left">Owners</th>
                       <th className="px-4 py-3 text-left">Status</th>
+                      <th className="px-4 py-3 text-left">Scarcity</th>
                       <th className="px-4 py-3 text-left">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {cities.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="py-6 text-center text-sm italic text-slate-400">
+                        <td colSpan={6} className="py-6 text-center text-sm italic text-slate-400">
                           No cities found yet.
                         </td>
                       </tr>
@@ -508,7 +978,9 @@ export default function InternalControlPage() {
                           key={city.id}
                           city={city}
                           onEdit={startEditCity}
-                          onDelete={(targetCity) => void handleDeleteCity(targetCity)}
+                          onDisable={(targetCity) => void handleDisableCity(targetCity)}
+                          onToggleScarcity={(targetCity) => void handleToggleCityScarcity(targetCity)}
+                          scarcitySavingCityId={scarcitySavingCityId}
                         />
                       ))
                     )}
@@ -525,7 +997,7 @@ export default function InternalControlPage() {
               <div>
                 <h2 className="text-lg font-bold text-slate-800">Owner Applications</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Superadmin can review submitted owner applications and reject those that do not meet standards.
+                  Superadmin can approve or reject submitted owner applications. Approved applicants are promoted to Owner.
                 </p>
               </div>
               <button
@@ -562,20 +1034,32 @@ export default function InternalControlPage() {
                         ) : null}
                       </div>
                       <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleApproveApplication(application)}
-                          className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleRejectApplication(application)}
-                          className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
-                        >
-                          Reject
-                        </button>
+                        {application._status === "approved" ? (
+                          <span className="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                            ✓ Approved
+                          </span>
+                        ) : application._status === "rejected" ? (
+                          <span className="inline-flex items-center rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-700">
+                            ✕ Rejected
+                          </span>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => void handleApproveApplication(application)}
+                              className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                            >
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleRejectApplication(application)}
+                              className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                            >
+                              Reject
+                            </button>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>

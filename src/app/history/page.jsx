@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
-import { getConsumerBookingHistory } from "@/lib/firestore/consumer";
+import { getConsumerBookingHistory, submitBookingRating } from "@/lib/firestore/consumer";
 import { getOwnerBookingHistory } from "@/lib/firestore/owner";
 
 function formatDate(value) {
@@ -35,6 +35,8 @@ export default function HistoryPage() {
   const [notice, setNotice] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [result, setResult] = useState({ total: 0, dailyCounts: [], bookings: [] });
+  const [ratingDrafts, setRatingDrafts] = useState({});
+  const [ratingSubmittingId, setRatingSubmittingId] = useState("");
   const isOwnerHistory = profile?.role === "owner";
 
   async function handleCopyBookingId(bookingCode, fallbackId) {
@@ -66,11 +68,62 @@ export default function HistoryPage() {
             toDate,
           });
       setResult(data);
+      setRatingDrafts({});
       setLoaded(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not load history.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  function updateRatingDraft(bookingId, field, value) {
+    setRatingDrafts((current) => ({
+      ...current,
+      [bookingId]: {
+        ratingOverall: current[bookingId]?.ratingOverall ?? "5",
+        ratingComment: current[bookingId]?.ratingComment ?? "",
+        [field]: value,
+      },
+    }));
+  }
+
+  async function handleSubmitRating(event, booking) {
+    event.preventDefault();
+    if (!user?.uid || isOwnerHistory) return;
+    const draft = ratingDrafts[booking.id] ?? { ratingOverall: "5", ratingComment: "" };
+    setRatingSubmittingId(booking.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const summary = await submitBookingRating({
+        bookingId: booking.id,
+        ratingOverall: Number(draft.ratingOverall),
+        ratingComment: draft.ratingComment ?? "",
+      });
+      setResult((current) => ({
+        ...current,
+        bookings: current.bookings.map((item) =>
+          item.id === booking.id
+            ? {
+                ...item,
+                ratingOverall: summary.ratingOverall,
+                ratingComment: draft.ratingComment ?? "",
+                ratingSubmittedAt: new Date().toISOString(),
+              }
+            : item
+        ),
+      }));
+      setRatingDrafts((current) => {
+        const next = { ...current };
+        delete next[booking.id];
+        return next;
+      });
+      setNotice(`Rated booking ${summary.bookingCode} ${summary.ratingOverall}/5.`);
+    } catch (ratingError) {
+      setError(ratingError instanceof Error ? ratingError.message : "Could not submit rating.");
+    } finally {
+      setRatingSubmittingId("");
     }
   }
 
@@ -150,17 +203,18 @@ export default function HistoryPage() {
                       <th className="px-3 py-2 font-semibold">Booking ID</th>
                       <th className="px-3 py-2 font-semibold">Property</th>
                       {isOwnerHistory && <th className="px-3 py-2 font-semibold">Room</th>}
-                      {isOwnerHistory && <th className="px-3 py-2 font-semibold">Bed</th>}
+                      <th className="px-3 py-2 font-semibold">Bed</th>
                       <th className="px-3 py-2 font-semibold">Check-In</th>
                       <th className="px-3 py-2 font-semibold">Check-Out</th>
                       <th className="px-3 py-2 font-semibold">Status</th>
                       <th className="px-3 py-2 font-semibold">City</th>
+                      <th className="px-3 py-2 font-semibold">Rating</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.bookings.length === 0 && (
                       <tr>
-                        <td colSpan={isOwnerHistory ? 8 : 6} className="px-3 py-4 text-center text-slate-500">
+                        <td colSpan={isOwnerHistory ? 9 : 8} className="px-3 py-4 text-center text-slate-500">
                           No booking details found.
                         </td>
                       </tr>
@@ -181,11 +235,53 @@ export default function HistoryPage() {
                         </td>
                         <td className="px-3 py-2 text-slate-700">{item.propertyName || "-"}</td>
                         {isOwnerHistory && <td className="px-3 py-2 text-slate-700">{item.roomName || "-"}</td>}
-                        {isOwnerHistory && <td className="px-3 py-2 text-slate-700">{item.bedCode || "-"}</td>}
+                        <td className="px-3 py-2 text-slate-700">{item.bedCode || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.checkInAt || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.checkOutAt || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.bookingStatus || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.cityName || "-"}</td>
+                        <td className="px-3 py-2 text-slate-700">
+                          {Number(item.ratingOverall ?? 0) > 0 ? (
+                            <div>
+                              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700">
+                                Rated {item.ratingOverall}/5
+                              </span>
+                              {item.ratingComment ? <p className="mt-1 max-w-48 text-xs text-slate-500">{item.ratingComment}</p> : null}
+                            </div>
+                          ) : !isOwnerHistory && String(item.bookingStatus ?? "").toLowerCase() === "completed" ? (
+                            <form className="grid min-w-56 gap-2" onSubmit={(event) => void handleSubmitRating(event, item)}>
+                              <div className="flex gap-2">
+                                <select
+                                  value={ratingDrafts[item.id]?.ratingOverall ?? "5"}
+                                  onChange={(event) => updateRatingDraft(item.id, "ratingOverall", event.target.value)}
+                                  className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500"
+                                >
+                                  <option value="5">5/5</option>
+                                  <option value="4">4/5</option>
+                                  <option value="3">3/5</option>
+                                  <option value="2">2/5</option>
+                                  <option value="1">1/5</option>
+                                </select>
+                                <button
+                                  type="submit"
+                                  disabled={ratingSubmittingId === item.id}
+                                  className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                                >
+                                  {ratingSubmittingId === item.id ? "Saving..." : "Rate"}
+                                </button>
+                              </div>
+                              <input
+                                value={ratingDrafts[item.id]?.ratingComment ?? ""}
+                                onChange={(event) => updateRatingDraft(item.id, "ratingComment", event.target.value)}
+                                maxLength={500}
+                                placeholder="Optional note"
+                                className="rounded-lg border border-slate-300 bg-white px-2 py-1 text-xs outline-none focus:border-sky-500"
+                              />
+                            </form>
+                          ) : (
+                            <span className="text-xs text-slate-500">Not rated</span>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

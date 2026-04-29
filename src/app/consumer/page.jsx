@@ -6,44 +6,11 @@ import { ProtectedRoute } from "@/components/auth/protected-route";
 import {
     checkInConfirmedBooking,
     checkoutOpenBooking,
-    createBookingWithAdvance,
     getActiveCities,
-    getConsumerBookingCount,
     getListingsByCity,
     getOpenConsumerBookings,
-    validateAadhaar,
 } from "@/lib/firestore/consumer";
-
-function pad2(value) {
-    return String(value).padStart(2, "0");
-}
-
-function toInputDateTime(date) {
-    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
-}
-
-function roundToNextQuarterHour(date) {
-    const next = new Date(date);
-    next.setSeconds(0, 0);
-    const minutes = next.getMinutes();
-    const rounded = Math.ceil(minutes / 15) * 15;
-    if (rounded === 60) {
-        next.setHours(next.getHours() + 1, 0, 0, 0);
-    } else {
-        next.setMinutes(rounded);
-    }
-    return next;
-}
-
-function nowInputDateTime() {
-    return toInputDateTime(roundToNextQuarterHour(new Date()));
-}
-
-function maskAadhaar(value) {
-    const digits = String(value ?? "").replace(/\D/g, "").slice(-4);
-    if (digits.length !== 4) return "XXXX XXXX";
-    return `XXXX XXXX ${digits}`;
-}
+import { formatDistance, googleMapsDirectionsUrl } from "@/lib/geo";
 
 function getElapsedHours(checkInAt) {
     const checkInMs = new Date(checkInAt).getTime();
@@ -51,7 +18,24 @@ function getElapsedHours(checkInAt) {
     return Math.max(1, Math.ceil((Date.now() - checkInMs) / (1000 * 60 * 60)));
 }
 
-function ConsumerPageInner() {
+function ratingText(average, count) {
+    const safeCount = Number(count ?? 0);
+    if (safeCount <= 0) {
+        return "New bed ratings pending";
+    }
+    return `${Number(average ?? 0).toFixed(1)}/5 from ${safeCount} stay${safeCount === 1 ? "" : "s"}`;
+}
+
+function readLocation(latValue, lngValue) {
+    const lat = Number(latValue);
+    const lng = Number(lngValue);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return null;
+    }
+    return { lat, lng };
+}
+
+function ConsumerContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
     const { profile, user } = useAuth();
@@ -65,21 +49,15 @@ function ConsumerPageInner() {
     const [duration, setDuration] = useState("hourly");
     const [bedFilter, setBedFilter] = useState("all");
     const [maxFinalPrice, setMaxFinalPrice] = useState("");
+    const [nearMeEnabled, setNearMeEnabled] = useState(false);
+    const [userLocation, setUserLocation] = useState(null);
     const [listings, setListings] = useState([]);
     const [openBookings, setOpenBookings] = useState([]);
-    const [selectedListing, setSelectedListing] = useState(null);
-    const [aadhaarNumber, setAadhaarNumber] = useState("");
-    const [checkInAt, setCheckInAt] = useState("");
-    const [bookingLoading, setBookingLoading] = useState(false);
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
     const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
-    const [bookingCount, setBookingCount] = useState(0);
-    const bookingSectionRef = useRef(null);
+    const initialSearchAppliedRef = useRef(false);
 
     const selectedCityName = useMemo(() => cities.find((item) => item.id === cityId)?.name ?? "", [cities, cityId]);
-    const hasSavedAadhaar = Boolean(profile?.hasAadhaar);
-    const aadhaarRequiredForBooking = bookingCount >= 1;
-    const minCheckInAt = useMemo(() => nowInputDateTime(), []);
 
     const loadOpenBookings = useCallback(async () => {
         if (!user?.uid) {
@@ -95,7 +73,14 @@ function ConsumerPageInner() {
         }
     }, [user?.uid]);
 
-    const runSearch = useCallback(async (nextCityId = cityId) => {
+    const runSearch = useCallback(async (
+        nextCityId = cityId,
+        nextDuration = duration,
+        nextBedFilter = bedFilter,
+        nextMaxFinalPrice = maxFinalPrice,
+        nextLocation = userLocation,
+        nextNearMeEnabled = nearMeEnabled
+    ) => {
         if (!nextCityId) {
             setError("Select a city before searching.");
             return;
@@ -103,27 +88,30 @@ function ConsumerPageInner() {
         setError(null);
         setNotice(null);
         setLoadingListings(true);
-        setSelectedListing(null);
         try {
-            const parsedMaxPrice = Number(maxFinalPrice);
+            const parsedMaxPrice = Number(nextMaxFinalPrice);
             const results = await getListingsByCity({
                 cityId: nextCityId,
-                duration,
-                bedFilter,
-                maxFinalPrice: maxFinalPrice.trim().length > 0 && !Number.isNaN(parsedMaxPrice)
+                duration: nextDuration,
+                bedFilter: nextBedFilter,
+                maxFinalPrice: nextMaxFinalPrice.trim().length > 0 && !Number.isNaN(parsedMaxPrice)
                     ? parsedMaxPrice
                     : undefined,
+                userLat: nextNearMeEnabled && nextLocation ? nextLocation.lat : undefined,
+                userLng: nextNearMeEnabled && nextLocation ? nextLocation.lng : undefined,
             });
             setListings(results);
             if (results.length === 0) {
                 setNotice("No listings found for selected filters.");
+            } else if (nextNearMeEnabled && nextLocation) {
+                setNotice("Listings are sorted by nearest property from your current location.");
             }
         } catch (searchError) {
             setError(searchError instanceof Error ? searchError.message : "Failed to load listings.");
         } finally {
             setLoadingListings(false);
         }
-    }, [bedFilter, cityId, duration, maxFinalPrice]);
+    }, [bedFilter, cityId, duration, maxFinalPrice, nearMeEnabled, userLocation]);
 
     useEffect(() => {
         async function loadCities() {
@@ -142,101 +130,59 @@ function ConsumerPageInner() {
     }, []);
 
     useEffect(() => {
+        if (initialSearchAppliedRef.current) {
+            return;
+        }
         const initialCityId = searchParams.get("cityId");
         const initialDuration = searchParams.get("duration");
         const initialBedFilter = searchParams.get("bedFilter");
+        const initialNearMe = searchParams.get("nearMe") === "1";
+        const initialLocation = readLocation(searchParams.get("userLat"), searchParams.get("userLng"));
+        const effectiveDuration = initialDuration && ["hourly", "overnight", "overday"].includes(initialDuration)
+            ? initialDuration
+            : duration;
+        const effectiveBedFilter = initialBedFilter && ["all", "AC", "NON_AC"].includes(initialBedFilter)
+            ? initialBedFilter
+            : bedFilter;
         if (initialCityId) {
+            initialSearchAppliedRef.current = true;
             setCityId(initialCityId);
-            void runSearch(initialCityId);
+            setDuration(effectiveDuration);
+            setBedFilter(effectiveBedFilter);
+            setNearMeEnabled(Boolean(initialNearMe && initialLocation));
+            setUserLocation(initialLocation);
+            void runSearch(initialCityId, effectiveDuration, effectiveBedFilter, maxFinalPrice, initialLocation, Boolean(initialNearMe && initialLocation));
         }
-        if (initialDuration && ["hourly", "overnight", "overday"].includes(initialDuration)) {
-            setDuration(initialDuration);
-        }
-        if (initialBedFilter && ["all", "AC", "NON_AC"].includes(initialBedFilter)) {
-            setBedFilter(initialBedFilter);
-        }
-    }, [runSearch, searchParams]);
+    }, [bedFilter, duration, maxFinalPrice, runSearch, searchParams]);
 
     useEffect(() => {
         void loadOpenBookings();
     }, [loadOpenBookings]);
-
-    useEffect(() => {
-        async function loadBookingCount() {
-            if (!user?.uid) {
-                setBookingCount(0);
-                return;
-            }
-            try {
-                const total = await getConsumerBookingCount(user.uid);
-                setBookingCount(total);
-            } catch {
-                setBookingCount(0);
-            }
-        }
-        void loadBookingCount();
-    }, [user?.uid]);
 
     async function handleSearch(event) {
         event?.preventDefault();
         await runSearch();
     }
 
-    function openBookingSheet(listing) {
+    function openBookingPage(listing) {
+        const params = new URLSearchParams({
+            cityId: cityId || "",
+            propertyId: listing.propertyId || "",
+            duration,
+            bedFilter,
+        });
+        if (nearMeEnabled && userLocation) {
+            params.set("nearMe", "1");
+            params.set("userLat", String(userLocation.lat));
+            params.set("userLng", String(userLocation.lng));
+        }
+        const bookingPath = `/booking?${params.toString()}`;
         if (!user?.uid) {
-            const next = encodeURIComponent(`/consumer?cityId=${cityId || ""}&duration=${duration}&bedFilter=${bedFilter}`);
+            const next = encodeURIComponent(bookingPath);
             router.push(`/login?next=${next}`);
             return;
         }
-        setSelectedListing(listing);
-        setError(null);
-        setNotice(null);
-        const defaultCheckIn = toInputDateTime(roundToNextQuarterHour(new Date()));
-        setCheckInAt(defaultCheckIn);
-        setAadhaarNumber("");
-        setTimeout(() => bookingSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
-    }
-
-    async function handleBooking(event) {
-        event.preventDefault();
-        if (!user?.uid || !selectedListing) return;
-
-        if (aadhaarRequiredForBooking && !validateAadhaar(aadhaarNumber)) {
-            setError("Aadhaar is required from your second booking onward. Enter a valid 12-digit Aadhaar number.");
-            return;
-        }
-
-        if (!checkInAt) {
-            setError("Select check-in time.");
-            return;
-        }
-
-        if (new Date(checkInAt).getTime() < Date.now()) {
-            setError("Check-in time cannot be in the past.");
-            return;
-        }
-
-        setBookingLoading(true);
-        setError(null);
-        setNotice(null);
-        try {
-            const result = await createBookingWithAdvance({
-                userId: user.uid,
-                listing: selectedListing,
-                requirementBedType: bedFilter,
-                duration,
-                checkInAt,
-            });
-            setNotice(`Booking opened. Booking ID: ${result.bookingCode}. Allocated bed: ${result.allocatedBedCode} (${result.allocatedBedType}). Advance INR 100 recorded.`);
-            setCheckInAt("");
-            setSelectedListing(null);
-            await loadOpenBookings();
-            setBookingCount((current) => current + 1);
-        } catch (bookingError) {
-            setError(bookingError instanceof Error ? bookingError.message : "Booking failed.");
-        } finally {
-            setBookingLoading(false);
-        }
+        router.push(bookingPath);
     }
 
     async function handleCheckoutBooking(bookingId) {
@@ -335,18 +281,31 @@ function ConsumerPageInner() {
 
             <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
                 <h2 className="text-xl font-semibold">Listings {selectedCityName ? `in ${selectedCityName}` : ""}</h2>
+                {nearMeEnabled && userLocation ? (
+                    <p className="mt-1 text-xs text-slate-500">Nearest properties are shown first. Directions open in Google Maps from your detected location.</p>
+                ) : null}
                 <div className="mt-4 grid gap-4 md:grid-cols-2">
                     {listings.map((item) => (
                         <article key={item.propertyId} className="animate-list-item rounded-xl border border-slate-200 bg-white/80 p-4 transition hover:-translate-y-0.5 hover:border-sky-200">
                             <h3 className="text-lg font-semibold">{item.propertyName}</h3>
                             <p className="mt-1 text-sm text-slate-600">{item.exactAddress}</p>
-                            <p className="mt-1 text-sm text-slate-600">Near Railway: {item.nearRailwayKm} km | Near Bus Stand: {item.nearBusKm} km</p>
-                            <p className="mt-2 text-sm text-slate-700">Available Beds: {item.availableBeds} | AC: {item.acBeds} | Non-AC: {item.nonAcBeds}</p>
-                            <p className="mt-2 text-sm font-semibold text-slate-900">Final total starts from INR {item.minFinalPrice}</p>
-                            <p className="mt-1 text-xs text-slate-500">Price source: owner-set bed prices + platform charges.</p>
+                            <p className="mt-1 text-sm text-slate-600">Near Railway: {formatDistance(item.nearRailwayKm) || "-"} | Near Bus Stand: {formatDistance(item.nearBusKm) || "-"}</p>
+                            {Number.isFinite(Number(item.distanceFromUserKm)) ? (
+                                <p className="mt-1 text-sm font-semibold text-sky-700">Distance from you: {formatDistance(item.distanceFromUserKm)}</p>
+                            ) : null}
+                            {item.scarcityApplied ? (
+                                <p className="mt-2 text-sm text-amber-700">
+                                    Beds Available Now: {item.shownAvailableBeds} (high demand in this area)
+                                </p>
+                            ) : (
+                                <p className="mt-2 text-sm text-slate-700">Available Beds: {item.shownAvailableBeds} | AC: {item.acBeds} | Non-AC: {item.nonAcBeds}</p>
+                            )}
+                            <p className="mt-2 text-sm font-semibold text-slate-900">Hourly from INR {item.minHourlyPrice} | Overnight from INR {item.minOvernightPrice}</p>
+                            <p className="mt-1 text-xs font-semibold text-slate-600">Bed rating: {ratingText(item.ratingAverage, item.ratingCount)}</p>
+                            <p className="mt-1 text-xs text-slate-500">Final amount is calculated at checkout from actual stay time.</p>
                             <div className="mt-3 flex gap-2">
-                                <a href={`https://www.google.com/maps?q=${item.lat},${item.lng}`} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Open Map</a>
-                                <button type="button" onClick={() => openBookingSheet(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
+                                <a href={googleMapsDirectionsUrl({ lat: item.lat, lng: item.lng }, nearMeEnabled ? userLocation : null)} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Directions</a>
+                                <button type="button" onClick={() => openBookingPage(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
                                     {user ? "Book This" : "Login To Book"}
                                 </button>
                             </div>
@@ -433,35 +392,6 @@ function ConsumerPageInner() {
                 </section>
             ) : null}
 
-            {selectedListing ? (
-                <section ref={bookingSectionRef} className="glass-card animate-stagger mt-8 rounded-2xl p-6">
-                    <h2 className="text-xl font-semibold">Book: {selectedListing.propertyName}</h2>
-                    <p className="mt-2 text-sm text-slate-600">
-                        {aadhaarRequiredForBooking
-                            ? "Aadhaar is mandatory from your second booking onward. Checkout will be done later from Live/Open bookings."
-                            : "First booking is easier: Aadhaar is optional for this booking. Checkout will be done later from Live/Open bookings."}
-                    </p>
-
-                    {hasSavedAadhaar && aadhaarRequiredForBooking ? (
-                        <p className="mt-2 text-xs text-slate-500">Saved Aadhaar on file: {maskAadhaar(profile?.aadhaarLast4 ?? "")}. Re-enter the full Aadhaar number to confirm this booking.</p>
-                    ) : null}
-
-                    <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={handleBooking}>
-                        <input value={aadhaarNumber} onChange={(event) => setAadhaarNumber(event.target.value)} placeholder={aadhaarRequiredForBooking ? "Aadhaar number (12 digits)" : "Aadhaar number (optional for first booking)"} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required={aadhaarRequiredForBooking} />
-
-                        <div>
-                            <label className="mb-1 block text-xs font-semibold text-slate-600">Check-in</label>
-                            <input type="datetime-local" value={checkInAt} onChange={(event) => setCheckInAt(event.target.value)} min={minCheckInAt} className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required />
-                        </div>
-
-                        <button type="submit" disabled={bookingLoading} className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400">
-                            {bookingLoading ? "Booking..." : "Open Booking + INR 100 Advance"}
-                        </button>
-
-                        <button type="button" onClick={() => setSelectedListing(null)} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
-                    </form>
-                </section>
-            ) : null}
         </main>
         </ProtectedRoute>
     );
@@ -469,8 +399,8 @@ function ConsumerPageInner() {
 
 export default function ConsumerPage() {
     return (
-        <Suspense>
-            <ConsumerPageInner />
+        <Suspense fallback={<main className="mx-auto max-w-6xl px-5 py-10 text-sm text-slate-600">Loading consumer portal...</main>}>
+            <ConsumerContent />
         </Suspense>
     );
 }

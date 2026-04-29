@@ -1,12 +1,12 @@
 "use client";
 
-import { Suspense } from "react";
 import Link from "next/link";
+import { Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { dashboardPathByRole, roleLabel } from "@/types/roles";
 
-function UnauthorizedPageInner() {
+function UnauthorizedContent() {
   const params = useSearchParams();
   const { user, profile } = useAuth();
   const attemptedPath = params.get("from") || "";
@@ -63,8 +63,8 @@ function UnauthorizedPageInner() {
 
 export default function UnauthorizedPage() {
   return (
-    <Suspense>
-      <UnauthorizedPageInner />
+    <Suspense fallback={<main className="mx-auto min-h-screen max-w-3xl px-6 py-16 text-sm text-slate-600">Loading access guidance...</main>}>
+      <UnauthorizedContent />
     </Suspense>
   );
 }
