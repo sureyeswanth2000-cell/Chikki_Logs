@@ -110,6 +110,7 @@
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [ ] Improve overall UX across login, booking, and profile completion
 - [ ] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
+- [ ] Rethink the Create Property map UI: current map looks poor/blank and needs clearer tiles/loading state, better sizing, and a more confidence-building exact-location selection flow
 - [ ] Polish UI after flow stability is confirmed
 - [ ] Improve current-location UX so it feels intentional and premium
 - [ ] Add richer trust-forward listing presentation
