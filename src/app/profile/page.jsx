@@ -37,7 +37,8 @@ export default function ProfilePage() {
 }
 
 function ProfileContent() {
-    const { user, profile, refreshProfile, linkGoogleToCurrentUser, isGoogleLinked } = useAuth();
+    const { user, profile, refreshProfile, linkGoogleToCurrentUser, isGoogleLinked, signOutUser } = useAuth();
+    const router = useRouter();
     const [editing, setEditing] = useState(false);
     const [saving, setSaving] = useState(false);
     const [linkingGoogle, setLinkingGoogle] = useState(false);
@@ -127,21 +128,35 @@ function ProfileContent() {
         }
     }
 
+    async function handleSignOut() {
+        await signOutUser();
+        router.replace("/");
+    }
+
     return (
         <ProtectedRoute allowedRoles={["consumer", "owner", "operator", "superadmin"]}>
         <main className="mx-auto max-w-2xl px-5 py-10 md:px-6 md:py-12">
             <section className="glass-card animate-rise rounded-2xl p-8">
                 <div className="flex items-center justify-between gap-3">
                     <h1 className="text-3xl font-bold">My Profile</h1>
-                    {!editing && (
+                    <div className="flex flex-wrap justify-end gap-2">
+                        {!editing && (
+                            <button
+                                type="button"
+                                onClick={startEdit}
+                                className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+                            >
+                                Edit Profile
+                            </button>
+                        )}
                         <button
                             type="button"
-                            onClick={startEdit}
-                            className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700"
+                            onClick={handleSignOut}
+                            className="rounded-full border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
                         >
-                            Edit Profile
+                            Sign Out
                         </button>
-                    )}
+                    </div>
                 </div>
 
                 {success && (

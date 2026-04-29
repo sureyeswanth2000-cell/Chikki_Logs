@@ -14,6 +14,7 @@ const basePrimaryNav = [
 ];
 
 const ownerPrimaryNav = [
+  { href: "/", label: "Home" },
   { href: "/owner", label: "Dashboard" },
   { href: "/owner/property-status", label: "Inventory" },
   { href: "/owner/earnings", label: "Earnings" },
@@ -40,7 +41,7 @@ export function SiteChrome({ children }) {
     }
     return window.localStorage.getItem("chikki_theme") === "dark" ? "dark" : "light";
   });
-  const { user, profile, signOutUser } = useAuth();
+  const { user, profile } = useAuth();
 
   const primaryNav =
     profile?.role === "owner"
@@ -62,11 +63,6 @@ export function SiteChrome({ children }) {
     setTheme(nextTheme);
     document.documentElement.dataset.theme = nextTheme;
     window.localStorage.setItem("chikki_theme", nextTheme);
-  }
-
-  async function handleSignOut() {
-    await signOutUser();
-    setMenuOpen(false);
   }
 
   return (
@@ -100,6 +96,14 @@ export function SiteChrome({ children }) {
 
           {/* Unified Menu - Right */}
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="inline-flex rounded-full border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+            >
+              {theme === "dark" ? "Light" : "Dark"}
+            </button>
             <button
               type="button"
               onClick={() => setMenuOpen((prev) => !prev)}
@@ -167,15 +171,6 @@ export function SiteChrome({ children }) {
                   Account
                 </div>
 
-                <button
-                  type="button"
-                  onClick={toggleTheme}
-                  className="mb-2 flex h-10 w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
-                  <span aria-hidden="true">{theme === "dark" ? "On" : "Off"}</span>
-                </button>
-
                 {user ? (
                   <>
                     <div className="mb-2 px-3 text-xs text-slate-500">
@@ -199,13 +194,6 @@ export function SiteChrome({ children }) {
                         Switch to Consumer Mode
                       </Link>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={handleSignOut}
-                      className="mt-1 w-full rounded-lg bg-rose-50 px-3 py-2 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-100"
-                    >
-                      Sign Out
-                    </button>
                   </>
                 ) : (
                   <div className="grid gap-2 p-1">

@@ -14,9 +14,11 @@
   - added anchors on the create-inventory page so add actions can route to the right form section
   - expanded dark-mode overrides for shared cards, tables, forms, and fixed color utilities so text remains readable
   - added root static export files with `.nojekyll` so GitHub Pages branch publishing can serve the app routes while the repository keeps one `main` branch
+  - removed duplicate owner-dashboard shortcut buttons, moved mode switching into the shared header, restored Home in owner navigation, and moved Sign Out into Profile
 
 ### Notes
 - Earnings currently show owner-facing expected/paid booking totals without exposing Chikki contribution or commission breakdown.
+- Header/home background image treatment is intentionally left for a later design pass.
 - Property approval for newly added owner properties is still open and should be implemented before payment.
 - Map/property creation UX is still open and should be redesigned in the next owner-dashboard pass.
 

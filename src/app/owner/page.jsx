@@ -219,22 +219,9 @@ export default function OwnerPage() {
         <ProtectedRoute allowedRoles={["owner"]}>
             <main className="mx-auto max-w-6xl px-5 py-8 md:px-6 md:py-10">
                 <section className="glass-card rounded-2xl p-5">
-                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div>
-                            <h1 className="text-3xl font-bold text-slate-900">Owner Dashboard</h1>
-                            <p className="mt-1 text-sm text-slate-600">Bookings that need attention now and next.</p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                            <Link href="/owner/property-status" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                                Inventory
-                            </Link>
-                            <Link href="/owner/earnings" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                                Earnings
-                            </Link>
-                            <Link href="/consumer" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
-                                Consumer Mode
-                            </Link>
-                        </div>
+                    <div>
+                        <h1 className="text-3xl font-bold text-slate-900">Owner Dashboard</h1>
+                        <p className="mt-1 text-sm text-slate-600">Bookings that need attention now and next.</p>
                     </div>
                 </section>
 

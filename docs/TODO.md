@@ -112,6 +112,7 @@
 - [x] Add dark and light mode toggle for the app shell
 - [x] Keep owner dashboard focused on active bookings, future bookings, and checkout pending; move earnings, inventory, and bed controls to their own pages
 - [x] Fix dark-mode contrast for shared cards, tables, forms, and fixed Tailwind color utilities so text remains readable
+- [ ] Add a proper background picture/visual treatment later so the header/home area does not feel blank
 - [ ] Improve overall UX across login, booking, and profile completion
 - [x] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
 - [x] Owner inventory list pages should end with clear Add actions for Add Property, Add Room, Add Bed, and Add All; clicking each action should route to the correct create flow instead of making owners hunt through the page
