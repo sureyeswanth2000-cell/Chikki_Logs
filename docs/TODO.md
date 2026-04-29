@@ -107,6 +107,7 @@
 
 ## UX / UI
 - [ ] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
+- [ ] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [ ] Improve overall UX across login, booking, and profile completion
 - [ ] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
