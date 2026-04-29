@@ -81,6 +81,7 @@
 - [x] Move Aadhaar collection to a separate step/page in the booking flow — do not show it inline on the consumer listing page
 - [x] Allow consumers to rate a bed after checkout — add a post-checkout rating prompt in booking history
 - [x] Add full location-to-listing flow using automatic nearest-city or nearest-property logic
+- [ ] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
 - [ ] Improve post-login return into the exact booking state, not only the consumer search context
 - [ ] Verify owner-side visibility immediately after consumer booking across all booking states
 - [ ] Harden booking flow against all dead ends and partial-state failures
