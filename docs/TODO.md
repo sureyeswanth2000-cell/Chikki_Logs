@@ -95,6 +95,7 @@
 - [ ] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
 - [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings
+- [ ] Fix owner earnings date filters: Today, week, month, and custom should show only that period's received/expected amounts, not all-time totals mixed into the selected-period cards
 - [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
 - [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
