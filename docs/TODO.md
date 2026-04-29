@@ -96,6 +96,8 @@
 - [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
 - [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings
 - [ ] Fix owner earnings date filters: Today, week, month, and custom should show only that period's received/expected amounts, not all-time totals mixed into the selected-period cards
+- [ ] Add owner edit-price action for each bed in Inventory / Bed Control so owners can update hourly, overnight, and overday base prices without recreating the bed
+- [ ] Design automatic peak-demand pricing: increase consumer booking cost when demand/traffic is high for a city, area, property, or specific bed, with guardrails and operator/superadmin controls
 - [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
 - [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
