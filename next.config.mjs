@@ -2,6 +2,7 @@ const nextConfig = {
     output: 'export',
     basePath: '/Chikki_Logs',
     assetPrefix: '/Chikki_Logs',
+    trailingSlash: true,
     images: {
         unoptimized: true,
     },
