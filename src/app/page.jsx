@@ -4,15 +4,27 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
+import { dashboardPathByRole } from "@/types/roles";
 import { getActiveCities } from "@/lib/firestore/consumer";
+import { findNearestCity, formatDistance } from "@/lib/geo";
 
 export default function Home() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { user, profile, loading } = useAuth();
   const [cities, setCities] = useState([]);
   const [cityId, setCityId] = useState("");
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [locationNotice, setLocationNotice] = useState("");
+
+  // Redirect non-consumer roles away from home to their own dashboard
+  useEffect(() => {
+    if (!loading && user && profile) {
+      const role = profile.role;
+      if (role === "operator" || role === "superadmin" || role === "owner") {
+        router.replace(dashboardPathByRole(role));
+      }
+    }
+  }, [loading, user, profile, router]);
 
   useEffect(() => {
     async function loadCities() {
@@ -36,14 +48,37 @@ export default function Home() {
       setLocationNotice("Current-location access is not available in this browser. Please choose your city manually.");
       return;
     }
+    if (cities.length === 0) {
+      setLocationNotice("Cities are still loading. Please try again in a moment.");
+      return;
+    }
     setDetectingLocation(true);
     setLocationNotice("");
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const lat = position.coords.latitude.toFixed(5);
-        const lng = position.coords.longitude.toFixed(5);
-        setLocationNotice(`Current location detected at ${lat}, ${lng}. Choose your nearest city to see nearby beds.`);
+        const lat = Number(position.coords.latitude.toFixed(5));
+        const lng = Number(position.coords.longitude.toFixed(5));
+        const nearest = findNearestCity(cities, { lat, lng });
+        if (!nearest) {
+          setLocationNotice("We detected your location, but could not match it to a service city. Please choose your city manually.");
+          setDetectingLocation(false);
+          return;
+        }
+        if (!nearest.inServiceRadius) {
+          setCityId(nearest.id);
+          setLocationNotice(`Nearest pilot city is ${nearest.name} (${formatDistance(nearest.distanceKm)} away), but it is outside the current service radius. Please choose your city manually.`);
+          setDetectingLocation(false);
+          return;
+        }
+        const params = new URLSearchParams({
+          cityId: nearest.id,
+          nearMe: "1",
+          userLat: String(lat),
+          userLng: String(lng),
+        });
+        setLocationNotice(`Showing beds near ${nearest.name} (${formatDistance(nearest.distanceKm)} away).`);
         setDetectingLocation(false);
+        router.push(`/consumer?${params.toString()}`);
       },
       () => {
         setLocationNotice("We could not detect your location automatically. Please select your city manually.");
@@ -93,7 +128,7 @@ export default function Home() {
               ))}
             </select>
             <button type="button" onClick={useCurrentLocation} disabled={detectingLocation} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:opacity-60">
-              {detectingLocation ? "Detecting..." : "Use Current Location"}
+              {detectingLocation ? "Detecting..." : "Find Beds Near Me"}
             </button>
             <button type="button" onClick={openConsumerWithCity} className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
               Show Beds

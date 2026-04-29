@@ -46,6 +46,19 @@ export default function LoginPage() {
           setOtpSubmitting(false);
         }
     }
+    async function handleResendOtp() {
+        setOtpSubmitting(true);
+        setError(null);
+        try {
+            await sendOtp(lastOtpPhoneNumber || phone);
+        }
+        catch (e) {
+            setError(e instanceof Error ? e.message : "Could not resend OTP.");
+        }
+        finally {
+          setOtpSubmitting(false);
+        }
+    }
     async function handleVerifyOtp(event) {
         event.preventDefault();
         setOtpSubmitting(true);
@@ -59,7 +72,9 @@ export default function LoginPage() {
             return;
         }
         setOtpSubmitting(false);
-        router.replace(targetPath);
+        // Redirect is handled by the useEffect that watches profile — calling
+        // router.replace here would use a stale targetPath (profile not yet in
+        // React state) and send every role to "/" instead of their dashboard.
     }
 
       function handleEditPhone() {
@@ -76,7 +91,8 @@ export default function LoginPage() {
         setError(null);
         try {
             await signInWithGoogle();
-            router.replace(targetPath);
+            // Redirect is handled by the useEffect that watches profile — same
+            // reason as handleVerifyOtp: targetPath is stale here.
         }
         catch (e) {
             setError(e instanceof Error ? e.message : "Google sign-in failed.");
@@ -145,6 +161,17 @@ export default function LoginPage() {
             <button type="submit" disabled={otpSubmitting || googleSubmitting} className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400">
               {otpSubmitting ? "Verifying..." : "Verify OTP"}
             </button>
+            <button
+              type="button"
+              onClick={() => void handleResendOtp()}
+              disabled={otpSubmitting || googleSubmitting || otpResendInSeconds > 0}
+              className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100"
+            >
+              {otpResendInSeconds > 0 ? `Resend in ${otpResendInSeconds}s` : "Resend OTP"}
+            </button>
+            {otpResendInSeconds > 0 ? (
+              <p className="text-xs text-amber-700">You can resend the OTP after 30 seconds if it does not arrive.</p>
+            ) : null}
           </form>)}
 
         <div className="mt-6 flex items-center gap-3 text-xs uppercase tracking-[0.18em] text-slate-400">

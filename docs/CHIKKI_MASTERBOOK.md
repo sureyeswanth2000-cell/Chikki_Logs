@@ -1,6 +1,6 @@
 # Chikki Masterbook
 
-Last updated: 2026-04-23
+Last updated: 2026-04-26
 Audience: Founders + Builders
 Role: Canonical internal operating manual for Chikki Beds
 
@@ -28,6 +28,15 @@ The platform is designed around four actors:
 - Owner: lists and manages property, rooms, beds, pricing, and availability
 - Operator: handles day-to-day platform monitoring, owner application review, and consumer/owner role swaps
 - Superadmin: handles platform control, city rollout, hidden internal access, and higher-order role management
+
+Consumer discovery is location-first:
+- the home page asks for location first
+- the home page can detect browser location, choose the nearest service city, and open nearby listings
+- listings can sort properties by distance from the detected user location
+- nearby beds are shown after location selection
+- Google Maps directions links are used for navigation to properties in the MVP
+- each bed card should show both hourly price and overnight price before click
+- the consumer compares prices before opening the detailed booking flow
 
 ### Why It Exists
 There is a practical travel need in Indian metro and transit-heavy cities for short-stay, low-cost, bed-level accommodation. Traditional hotel flows are room-centric. Chikki is bed-centric. That matters for:
@@ -59,34 +68,42 @@ Chikki should become the most trusted and operationally simple bed-booking layer
 Confirmed model from the repo and working docs:
 - Booking model: instant booking against available beds
 - Inventory unit: bed-level, not room-level
-- Duration model: hourly, overnight, overday
+- Stay model: hourly or overnight choice on the home page
+- Location model: stored city/property coordinates power nearest-city and nearest-property discovery; consumer live location is passed through the session URL only and is not stored by the MVP flow
+- Distance display: values under 1 km are shown in meters, while longer distances are shown in km
+- Booking route: listing cards open `/booking` so bed selection and start time are completed before review/identity confirmation
+- First booking flow: start time is mandatory, end time is optional, and full stay duration is not required upfront
+- Advance booking window: start time can be no more than 24 hours ahead
+- Checkout flow: actual time spent is shown at checkout, and payment is collected at checkout
+- Checkout billing rule: stays under 15 minutes cancel without payment; stays from 15 minutes up to less than 60 minutes are charged as a full hour
+- Rating model: completed bookings can be rated once from history; bed records keep only aggregate rating average/count for search and booking display
 - Advance amount: INR 100 at booking
 - Fee model: 10% commission + 2% payment/gateway charge
-- Price shown to user: final total, not internal fee breakdown
-- Cancellation window: 15 minutes
-- Aadhaar requirement: not required for first booking, required from second booking onward
+- Price shown to user: hourly and overnight prices on the listing card, plus final amount due at checkout
+- Cancellation window: configurable by superadmin (default 15 minutes)
+- Aadhaar requirement: not required for first booking, required from second booking onward, with a popup prompt on the home screen after the first booking completes
+- Aadhaar storage: full Aadhaar is stored only in the backend-only `aadhaar_identity_vault`; business records use `aadhaarRefId` and masked last-4 metadata only
 
-Pricing formula:
-- Base bed price = B
-- Commission = 10% of B
-- Gateway/payment charge = 2% of B
-- User final total = 1.12B
+Pricing model:
+- show hourly and overnight rates to the consumer on the home page
+- keep internal commission and gateway logic separate from consumer-facing pricing copy unless a future design explicitly changes that rule
 
 ### Why It Exists
 These rules keep the MVP simple:
 - fixed advance amount reduces friction
-- final-price display reduces cognitive load
+- visible hourly and overnight prices help users compare beds quickly
 - bed-level inventory improves real availability
-- short duration options fit transit travelers and micro-stays
+- start-time-first booking reduces friction for first-time users
+- checkout-based payment keeps the payment moment aligned with actual stay duration
 
 ### Psychology / User Behavior
-- Final-price-only display lowers hesitation during decision making
+- visible hourly and overnight price options lower hesitation during decision making
 - Small advance creates commitment without forcing full payment upfront
 - Delaying Aadhaar until repeat usage lowers first-booking friction while still preserving traceability for returning users
 
 ### Gaps / Risks
 - Fee transparency may later need a trust explanation even if the UI still shows only final price
-- Aadhaar handling must continue to stay privacy-safe and clearly explained
+- Aadhaar reveal is break-glass only through superadmin `Identity Access`: a detailed reason is required, every reveal is audited, and production MFA/second-approval remains the next hardening step
 - Remaining amount and settlement flow are represented in logic, but payment gateway execution is still incomplete
 
 ### Future Direction
@@ -99,19 +116,29 @@ These rules keep the MVP simple:
 
 #### Current State
 Implemented flow in the app:
-- Browse city-based listings
-- Filter by city, duration, bed type, and max final price
-- View listing address and distance from railway and bus points
-- Open map for property location
-- Start booking with conditional Aadhaar confirmation based on booking count
-- Choose check-in time
+- Select location first on the home page
+- Use "Find Beds Near Me" to detect browser location and route to the nearest service city when inside its service radius
+- Browse nearby listings with hourly and overnight prices visible before click
+- See nearest properties first when location context is available
+- Filter by city, duration, bed type, and max price
+- View listing address, distance from railway and bus points, and distance from the detected user location when available
+- Open Google Maps directions for a property from listing or booking pages
+- Start booking from listing cards into `/booking`
+- Choose exact bed and start time first
+- Review booking details with conditional Aadhaar reference confirmation based on booking count
+- Allow end time to stay optional for first-time flow
 - Create booking with INR 100 advance placeholder
 - See live/open bookings
 - Check in when booking time arrives
-- Checkout later and compute remaining payment
+- At checkout, show start time, end time, total time spent, and final amount due
+- Collect payment at checkout
+- Rate a completed stay from booking history; the rating stays attached to that booking
+- See bed rating average/count during listing search and exact bed selection
 
 Relevant route:
 - `src/app/consumer/page.jsx`
+- `src/app/booking/page.jsx`
+- `src/app/history/page.jsx`
 
 #### Why It Exists
 This flow supports short, practical transit stays with low discovery overhead and bed-specific allocation.
@@ -131,6 +158,7 @@ This flow supports short, practical transit stays with low discovery overhead an
 - Add richer listing detail pages
 - Add trust layers such as verification level, amenities, host quality score, and arrival confidence cues
 - Add repeat-booking and saved preference mechanics
+- Add train tracking as a future booking companion feature using train number or PNR input and notification alerts
 
 ### Owner Journey
 
@@ -209,6 +237,8 @@ The product needs a middle operational layer that can keep supply quality and su
 #### Current State
 Implemented superadmin capabilities include:
 - city management
+- platform timeout settings management
+- city-level safe scarcity control
 - user search by phone
 - create operator
 - create new superadmin
@@ -287,6 +317,7 @@ Architecture still influences psychology:
 Defined collection names in `src/lib/firestore/collections.js`:
 - `cities`
 - `users`
+- `aadhaar_identity_vault`
 - `properties`
 - `rooms`
 - `beds`
@@ -301,19 +332,34 @@ Defined collection names in `src/lib/firestore/collections.js`:
 
 Main callable backend functions in `functions/index.js`:
 - `updateOwnProfile`
+- `submitAadhaarIdentity`
 - `setUserRole`
 - `recordPrivilegedAction`
+- `getPlatformSettings`
+- `updatePlatformSettings`
+- `setCityScarcityMode`
 - `createBookingWithAdvance`
+- `submitBookingRating`
 - `authorizeOtpRequest`
 - `completeCheckout`
+
+Main scheduled backend jobs in `functions/index.js`:
+- `cancelNoShowBookings` (every minute)
+- `refreshCityScarcityValues` (every 15 minutes)
 
 Main security and anomaly logic:
 - OTP rate-limit authorization
 - booking rate-limit enforcement
+- booking-history-only rating submission with duplicate prevention
+- city/property coordinate lookup for nearest-city and nearest-property discovery
+- backend-only Aadhaar identity vault writes and reference-ID mapping
 - temporary bed locking during booking
+- no-show auto-cancel after check-in grace timeout
+- bounded safe scarcity refresh for enabled cities
 - payment status anomaly detection
 - cross-entity anomaly detection through audit logs
-- Aadhaar hashing and last-4 retention pattern
+- Aadhaar identity vault with encrypted Aadhaar, HMAC duplicate detection, reference ID mapping, and masked last-4 display metadata
+- superadmin break-glass Aadhaar reveal callable with reason capture, audit log, and temporary UI display
 
 ### Why It Exists
 The backend preserves business integrity where client-only logic would be too weak:
@@ -348,7 +394,8 @@ Product surfaces:
 - `src/app/page.jsx`: landing page
 - `src/app/login/page.jsx`: phone OTP and Google login
 - `src/app/register/page.jsx`: registration path
-- `src/app/consumer/page.jsx`: search, booking, check-in, checkout [✅ PROTECTED for consumer role]
+- `src/app/consumer/page.jsx`: search, listing cards, open bookings, check-in, checkout [✅ PROTECTED for consumer role]
+- `src/app/booking/page.jsx`: dedicated booking step with bed/time selection, review, and final booking confirmation [✅ PROTECTED for consumer & owner roles]
 - `src/app/owner/page.jsx`: owner dashboard [✅ PROTECTED for owner role]
 - `src/app/operator/page.jsx`: operator monitoring and role-swap console [✅ PROTECTED for operator role]
 - `src/app/internal-control/page.jsx`: hidden superadmin control console [✅ PROTECTED for superadmin role]
@@ -369,6 +416,7 @@ Business logic:
 - `src/lib/firestore/owner.js`
 - `src/lib/firestore/profile.js`
 - `src/lib/firestore/superadmin.js`
+- `src/lib/geo.js`
 - `src/lib/cloud/security.js`
 - `src/lib/firebase.js`
 
@@ -402,7 +450,7 @@ Reference documentation already in repo:
 
 3. **Current State: All Routes Protected**
    - Public routes: `/`, `/login`, `/register`, `/support`, `/cities`, `/unauthorized`
-   - Protected consumer: `/consumer`, `/apply-owner`
+   - Protected consumer: `/consumer`, `/booking`, `/apply-owner`
    - Protected owner: `/owner`, `/owner/properties`, `/owner/beds`, `/owner/rooms`, `/owner/property-status`
    - Protected operator: `/operator`
    - Protected superadmin: `/internal-control`
@@ -414,6 +462,24 @@ Reference documentation already in repo:
 - If user logged in but role not in allowedRoles: redirects to `/unauthorized?from=<path>`
 - If profile takes >4s to load: shows timeout and redirects to `/unauthorized`
 - All role-specific dashboards protected against privilege escalation
+
+#### End-to-End Auth Verification
+End-to-end auth means validating the whole path from login to protected-page access, not just confirming that a user can sign in.
+
+Best method for Chikki:
+- test each role manually
+- confirm the landing page for each role
+- open protected URLs directly
+- verify unauthorized redirects and recovery guidance
+- confirm the 4-second profile timeout and back-button behavior
+
+Why this matters:
+- it catches wrong-role access before users do
+- it exposes redirect loops and stale-session issues
+- it confirms the visible app behavior matches the route rules in code
+
+Reference checklist:
+- `docs/AUTH_TEST_CHECKLIST.md`
 
 ### Why It Exists
 The codebase is grouped by role and business area rather than by deep technical abstraction. That makes MVP development faster and onboarding easier for a small team.
@@ -438,16 +504,22 @@ A role-centered codebase often mirrors a role-centered product. That helps the t
 - profile initialization and caching
 - city selection and search
 - bed listing retrieval by city
-- duration-based booking flow
-- conditional Aadhaar validation tied to booking count
+- browser-location nearest-city entry and nearest-property listing sort
+- Google Maps directions links for property navigation
+- dedicated `/booking` route for duration-based booking flow
+- conditional Aadhaar reference validation tied to booking count
 - map links for listing locations
 - booking creation with bed allocation
 - check-in and checkout flow
+- completed-booking rating submission and bed rating aggregate display
 - owner dashboard with properties, rooms, beds, blocks, live jobs, checkout alerts
 - owner application workflow
 - operator operational monitoring
 - operator consumer/owner role swaps
 - hidden superadmin city management
+- superadmin platform timeout control
+- superadmin break-glass Aadhaar reveal with mandatory reason and audit trail
+- superadmin and operator city-level safe scarcity controls
 - hidden superadmin operator and superadmin creation
 - audit and anomaly tracking foundation
 
@@ -491,7 +563,21 @@ Transit travelers usually care first about location, immediate availability, and
 ### Booking Conversion
 
 #### Current State
-Booking requires timing selection, advance payment placeholder flow, and conditional Aadhaar validation after the first successful booking.
+Booking should feel location-first and price-visible before the user clicks through:
+- nearby beds are shown after location selection
+- hourly and overnight prices are visible on the home page
+- `Book This` opens a dedicated booking route
+- the first booking step collects exact bed and start time
+- the review step includes the repeat-booking Aadhaar requirement when applicable
+- start time is limited to the next 24 hours
+- end time is optional until checkout
+- checkout shows actual time spent and the final amount due
+- payment is collected at checkout
+- Aadhaar reference becomes mandatory from the second booking onward; if no saved reference exists, the backend creates one in the protected vault
+- completed bookings can be rated once from `/history`
+- bed rating average/count appears during search and bed selection
+- detected-location searches sort listings by nearest property and preserve that location context into `/booking`
+- property directions open in Google Maps; the MVP does not call paid Google distance or place APIs
 
 #### Why It Exists
 This ensures traceability while keeping commitment lightweight.
@@ -507,6 +593,8 @@ This ensures traceability while keeping commitment lightweight.
 
 #### Future Direction
 - add stronger reassurance copy and proof of safety, legitimacy, and support availability
+- add train tracking as a booking-adjacent utility for railway-area stays
+- add third-party Aadhaar verification once the repeat-booking identity flow is ready
 
 ### Owner Motivation
 
@@ -610,12 +698,23 @@ Stage 4:
 - existing superadmin accounts are not editable from the UI
 - superadmin access is hidden behind an internal path
 - booking unit is the bed
-- durations are hourly, overnight, and overday
+- home page shows hourly and overnight prices before booking
+- `Book This` opens `/booking` for bed selection, start time selection, and review before confirmation
+- booking starts with a start time; end time is optional in the first-time flow
+- advance booking start time is limited to the next 24 hours
+- payment is collected at checkout based on actual time spent
+- if the stay is under 15 minutes, the booking cancels without payment
+- if the stay is 15 minutes or more but less than 60 minutes, charge one full hour
 - INR 100 advance is used at booking
-- final user price includes 10% commission and 2% payment/gateway charge
 - cancellation window is 15 minutes
 - Aadhaar is optional for the first booking and mandatory from the second booking onward
-- Google Maps-based location support is part of the experience
+- after the first booking, the home screen prompts the consumer to add Aadhaar before booking again
+- full Aadhaar is not stored in user, booking, payment, or availability records
+- Aadhaar reference IDs are UUID-style random values and are the only Aadhaar link used by business records
+- full Aadhaar can be revealed only through the superadmin break-glass flow and must never be copied into tickets, chats, notes, or other normal records
+- ratings are submitted only from completed booking history and are stored on the booking, while beds expose aggregate average/count
+- location discovery uses stored city/property coordinates, browser geolocation, and nearest-property sorting
+- Google Maps support is limited to directions links for the MVP; paid Maps APIs are deferred until route-level distance precision is needed
 - Firebase Firestore is the current database foundation
 
 ### Open Questions
@@ -624,6 +723,8 @@ Stage 4:
 - how trust and safety should be explicitly presented in the UI
 - how strong the review and reputation system should become in phase 2
 - which superadmin KPIs matter most on day 1 of scaled rollout
+- which third-party Aadhaar verification provider should be used when that work starts
+- how train tracking should balance train number, PNR input, and notification timing
 
 ### Assumptions To Revisit
 - whether all target geographies behave similarly around trust and location expectations
@@ -665,6 +766,7 @@ Update discipline:
 ## 12. Practical Next Moves
 - Make this book the first link for onboarding
 - Keep validating implemented behavior against Firebase environment setup
+- Run the end-to-end auth checklist after any auth or routing change
 - Document actual deployment flow and environment checklist next
 - Define premium trust signals as a product workstream, not just a design polish task
 - Add a dedicated roadmap section later if planning becomes release-based and date-driven

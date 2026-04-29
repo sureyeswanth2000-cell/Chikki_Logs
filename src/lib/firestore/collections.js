@@ -1,6 +1,7 @@
 export const COLLECTIONS = {
     cities: "cities",
     users: "users",
+    aadhaarIdentityVault: "aadhaar_identity_vault",
     properties: "properties",
     rooms: "rooms",
     beds: "beds",
@@ -12,4 +13,5 @@ export const COLLECTIONS = {
     ownerPayouts: "owner_payouts",
     auditLogs: "audit_logs",
     ownerApplications: "owner_applications",
+    platformSettings: "platform_settings",
 };

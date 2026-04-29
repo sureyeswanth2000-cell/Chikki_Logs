@@ -32,6 +32,26 @@ export async function updateOwnProfile(fields) {
   }
 }
 
+export async function submitAadhaarIdentity(payload) {
+  const callable = httpsCallable(functionsClient(), "submitAadhaarIdentity");
+  try {
+    const result = await callable(payload || {});
+    return result.data?.profile || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not save Aadhaar reference."));
+  }
+}
+
+export async function revealAadhaarBreakGlass(payload) {
+  const callable = httpsCallable(functionsClient(), "revealAadhaarBreakGlass");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not reveal Aadhaar."));
+  }
+}
+
 export async function completeCheckout(bookingId) {
   const callable = httpsCallable(functionsClient(), "completeCheckout");
   try {
@@ -49,6 +69,16 @@ export async function createBookingWithAdvance(payload) {
     return result.data || null;
   } catch (error) {
     throw new Error(toMessage(error, "Booking failed."));
+  }
+}
+
+export async function submitBookingRating(payload) {
+  const callable = httpsCallable(functionsClient(), "submitBookingRating");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not submit rating."));
   }
 }
 
@@ -79,5 +109,35 @@ export async function recordPrivilegedAction(payload) {
     return result.data || null;
   } catch (error) {
     throw new Error(toMessage(error, "Could not record the privileged action log."));
+  }
+}
+
+export async function getPlatformSettings() {
+  const callable = httpsCallable(functionsClient(), "getPlatformSettings");
+  try {
+    const result = await callable({});
+    return result.data?.settings || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not load platform settings."));
+  }
+}
+
+export async function updatePlatformSettings(payload) {
+  const callable = httpsCallable(functionsClient(), "updatePlatformSettings");
+  try {
+    const result = await callable(payload || {});
+    return result.data?.settings || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update platform settings."));
+  }
+}
+
+export async function setCityScarcityMode(payload) {
+  const callable = httpsCallable(functionsClient(), "setCityScarcityMode");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update city scarcity mode."));
   }
 }

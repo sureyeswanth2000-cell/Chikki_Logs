@@ -80,12 +80,50 @@ exports.detectCrossEntityAnomaly = onDocumentCreated("audit_logs/{logId}", async
 });
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const crypto = require("node:crypto");
 
 initializeApp();
 const db = getFirestore();
+
+const PLATFORM_SETTINGS_COLLECTION = "platform_settings";
+const PLATFORM_SETTINGS_DOC_ID = "main";
+const DEFAULT_CHECKIN_GRACE_MINUTES = 15;
+const MIN_CHECKIN_GRACE_MINUTES = 5;
+const MAX_CHECKIN_GRACE_MINUTES = 120;
+const SCARCITY_MIN_BEDS = 1;
+const SCARCITY_MAX_BEDS = 5;
+const AADHAAR_VAULT_COLLECTION = "aadhaar_identity_vault";
+
+function randomInt(min, max) {
+  const safeMin = Math.ceil(Number(min));
+  const safeMax = Math.floor(Number(max));
+  return Math.floor(Math.random() * (safeMax - safeMin + 1)) + safeMin;
+}
+
+function clampCheckInGraceMinutes(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_CHECKIN_GRACE_MINUTES;
+  }
+  return Math.max(MIN_CHECKIN_GRACE_MINUTES, Math.min(MAX_CHECKIN_GRACE_MINUTES, Math.round(parsed)));
+}
+
+async function readPlatformSettings() {
+  const ref = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    return {
+      checkInGraceMinutes: DEFAULT_CHECKIN_GRACE_MINUTES,
+    };
+  }
+  const data = snap.data() || {};
+  return {
+    checkInGraceMinutes: clampCheckInGraceMinutes(data.checkInGraceMinutes),
+  };
+}
 
 function assertAuth(auth) {
   if (!auth || !auth.uid) {
@@ -112,10 +150,58 @@ function legacyAadhaarDigits(value) {
   return digits.length === 12 ? digits : "";
 }
 
-function hashAadhaar(digits) {
-  if (!digits) return "";
-  const pepper = process.env.AADHAAR_HASH_PEPPER || "";
-  return crypto.createHash("sha256").update(`${pepper}:${digits}`).digest("hex");
+function aadhaarVaultKey() {
+  const rawKey = String(process.env.AADHAAR_VAULT_ENCRYPTION_KEY || process.env.AADHAAR_HASH_PEPPER || "").trim();
+  if (rawKey) {
+    try {
+      const decoded = Buffer.from(rawKey, "base64");
+      if (decoded.length === 32) {
+        return decoded;
+      }
+    } catch {
+      // Fall back to deriving a key from the configured secret text.
+    }
+    return crypto.createHash("sha256").update(rawKey).digest();
+  }
+  const fallback = String(process.env.GCLOUD_PROJECT || "chikki-local-dev-aadhaar-vault-fallback");
+  return crypto.createHash("sha256").update(fallback).digest();
+}
+
+function aadhaarHmac(digits) {
+  return crypto.createHmac("sha256", aadhaarVaultKey()).update(digits).digest("hex");
+}
+
+function encryptAadhaar(digits) {
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", aadhaarVaultKey(), iv);
+  const encrypted = Buffer.concat([cipher.update(digits, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    encryptedAadhaar: encrypted.toString("base64"),
+    aadhaarIv: iv.toString("base64"),
+    aadhaarTag: tag.toString("base64"),
+    encryptionAlgo: "aes-256-gcm",
+    keyVersion: String(process.env.AADHAAR_VAULT_KEY_VERSION || "v1"),
+  };
+}
+
+function decryptAadhaar(vaultData) {
+  const encryptedAadhaar = String(vaultData?.encryptedAadhaar ?? "");
+  const aadhaarIv = String(vaultData?.aadhaarIv ?? "");
+  const aadhaarTag = String(vaultData?.aadhaarTag ?? "");
+  if (!encryptedAadhaar || !aadhaarIv || !aadhaarTag) {
+    throw new HttpsError("failed-precondition", "Aadhaar vault record is incomplete.");
+  }
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    aadhaarVaultKey(),
+    Buffer.from(aadhaarIv, "base64"),
+  );
+  decipher.setAuthTag(Buffer.from(aadhaarTag, "base64"));
+  return Buffer.concat([
+    decipher.update(Buffer.from(encryptedAadhaar, "base64")),
+    decipher.final(),
+  ]).toString("utf8");
 }
 
 function normalizePhoneForOtp(rawValue) {
@@ -157,30 +243,12 @@ function requestIp(request) {
   return String(request?.rawRequest?.ip ?? "unknown");
 }
 
-function aadhaarMutation(inputValue) {
-  const digits = sanitizeAadhaar(inputValue);
-  if (!digits) {
-    return {
-      aadhaarHash: FieldValue.delete(),
-      aadhaarLast4: FieldValue.delete(),
-      aadhaarUpdatedAt: FieldValue.serverTimestamp(),
-      aadhaar: FieldValue.delete(),
-    };
-  }
-
-  return {
-    aadhaarHash: hashAadhaar(digits),
-    aadhaarLast4: digits.slice(-4),
-    aadhaarUpdatedAt: FieldValue.serverTimestamp(),
-    aadhaar: FieldValue.delete(),
-  };
-}
-
 function profileResponse(data, phoneNumber) {
+  const aadhaarRefId = typeof data?.aadhaarRefId === "string" ? data.aadhaarRefId.trim() : "";
   const last4Raw = typeof data?.aadhaarLast4 === "string" ? data.aadhaarLast4 : "";
   const legacyDigits = legacyAadhaarDigits(data?.aadhaar);
   const aadhaarLast4 = last4Raw ? last4Raw : legacyDigits.slice(-4);
-  const hasAadhaar = Boolean(aadhaarLast4 || (typeof data?.aadhaarHash === "string" && data.aadhaarHash));
+  const hasAadhaar = Boolean(aadhaarRefId && aadhaarLast4);
 
   return {
     role: String(data?.role || "consumer"),
@@ -189,7 +257,9 @@ function profileResponse(data, phoneNumber) {
     email: String(data?.email || ""),
     address: String(data?.address || ""),
     hasAadhaar,
+    aadhaarRefId,
     aadhaarLast4: aadhaarLast4 ? String(aadhaarLast4) : "",
+    aadhaarStatus: String(data?.aadhaarStatus || ""),
     createdAt: data?.createdAt || null,
     updatedAt: data?.updatedAt || null,
   };
@@ -295,6 +365,113 @@ async function logSecurityEvent({ actorUserId, action, metadata }) {
   });
 }
 
+async function upsertAadhaarIdentity({ userId, aadhaar, source }) {
+  const digits = sanitizeAadhaar(aadhaar);
+  if (!digits) {
+    return null;
+  }
+
+  const aadhaarRefId = crypto.randomUUID();
+  const hmac = aadhaarHmac(digits);
+  const existingSnap = await db.collection(AADHAAR_VAULT_COLLECTION)
+    .where("aadhaarHmac", "==", hmac)
+    .limit(1)
+    .get();
+
+  if (!existingSnap.empty) {
+    const existingDoc = existingSnap.docs[0];
+    const existing = existingDoc.data() || {};
+    const existingUserId = String(existing.userId ?? "");
+    if (existingUserId && existingUserId !== userId) {
+      await db.collection("audit_logs").add({
+        actorUserId: userId,
+        actorRole: "consumer",
+        action: "aadhaar_duplicate_detected",
+        entityType: "identity",
+        entityId: existingDoc.id,
+        metadata: {
+          source: String(source || "unknown"),
+        },
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      throw new HttpsError("already-exists", "This Aadhaar is already linked to another account.");
+    }
+
+    await existingDoc.ref.set({
+      ...encryptAadhaar(digits),
+      last4: digits.slice(-4),
+      status: "submitted",
+      source: String(source || "profile"),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection("audit_logs").add({
+      actorUserId: userId,
+      actorRole: "consumer",
+      action: "aadhaar_reference_updated",
+      entityType: "identity",
+      entityId: existingDoc.id,
+      metadata: {
+        source: String(source || "profile"),
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    return {
+      aadhaarRefId: existingDoc.id,
+      aadhaarLast4: digits.slice(-4),
+      aadhaarStatus: "submitted",
+    };
+  }
+
+  await db.collection(AADHAAR_VAULT_COLLECTION).doc(aadhaarRefId).set({
+    aadhaarRefId,
+    userId,
+    aadhaarHmac: hmac,
+    ...encryptAadhaar(digits),
+    last4: digits.slice(-4),
+    status: "submitted",
+    source: String(source || "profile"),
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  await db.collection("audit_logs").add({
+    actorUserId: userId,
+    actorRole: "consumer",
+    action: "aadhaar_reference_created",
+    entityType: "identity",
+    entityId: aadhaarRefId,
+    metadata: {
+      source: String(source || "profile"),
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    aadhaarRefId,
+    aadhaarLast4: digits.slice(-4),
+    aadhaarStatus: "submitted",
+  };
+}
+
+function aadhaarProfileMutation(identity) {
+  if (!identity) {
+    return {
+      aadhaar: FieldValue.delete(),
+      aadhaarHash: FieldValue.delete(),
+    };
+  }
+  return {
+    aadhaarRefId: identity.aadhaarRefId,
+    aadhaarLast4: identity.aadhaarLast4,
+    aadhaarStatus: identity.aadhaarStatus,
+    aadhaarUpdatedAt: FieldValue.serverTimestamp(),
+    aadhaar: FieldValue.delete(),
+    aadhaarHash: FieldValue.delete(),
+  };
+}
+
 async function enforceRateLimit(transaction, key, limit, windowMs) {
   const ref = db.collection("security_rate_limits").doc(key);
   const snap = await transaction.get(ref);
@@ -378,6 +555,10 @@ function timestampToMillis(value) {
   return null;
 }
 
+function normalizeRatingComment(value) {
+  return normalizeText(value, 500);
+}
+
 exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
 
@@ -385,6 +566,12 @@ exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
   const phoneNumber = request.auth.token.phone_number || "";
   const input = request.data || {};
   const initOnly = Boolean(input.initOnly);
+  const submittedAadhaar = Object.prototype.hasOwnProperty.call(input, "aadhaar")
+    ? sanitizeAadhaar(input.aadhaar)
+    : "";
+  const submittedIdentity = submittedAadhaar
+    ? await upsertAadhaarIdentity({ userId: uid, aadhaar: submittedAadhaar, source: initOnly ? "profile_init" : "profile" })
+    : null;
 
   const payload = {
     name: normalizeText(input.name, 120),
@@ -405,8 +592,8 @@ exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
       createdAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     };
-    if (Object.prototype.hasOwnProperty.call(input, "aadhaar")) {
-      Object.assign(profile, aadhaarMutation(input.aadhaar));
+    if (submittedAadhaar) {
+      Object.assign(profile, aadhaarProfileMutation(submittedIdentity));
     }
     await userRef.set(profile, { merge: true });
     const createdSnap = await userRef.get();
@@ -433,16 +620,12 @@ exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
 
   const legacyDigits = legacyAadhaarDigits(existing.aadhaar);
   if (legacyDigits) {
-    Object.assign(updateData, {
-      aadhaarHash: hashAadhaar(legacyDigits),
-      aadhaarLast4: legacyDigits.slice(-4),
-      aadhaarUpdatedAt: FieldValue.serverTimestamp(),
-      aadhaar: FieldValue.delete(),
-    });
+    const legacyIdentity = await upsertAadhaarIdentity({ userId: uid, aadhaar: legacyDigits, source: "legacy_profile_migration" });
+    Object.assign(updateData, aadhaarProfileMutation(legacyIdentity));
   }
 
-  if (Object.prototype.hasOwnProperty.call(input, "aadhaar")) {
-    Object.assign(updateData, aadhaarMutation(input.aadhaar));
+  if (submittedAadhaar) {
+    Object.assign(updateData, aadhaarProfileMutation(submittedIdentity));
   }
 
   await userRef.set(updateData, { merge: true });
@@ -451,6 +634,109 @@ exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
   return {
     ok: true,
     profile: profileResponse(mergedSnap.data() || {}, phoneNumber),
+  };
+});
+
+exports.submitAadhaarIdentity = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const uid = request.auth.uid;
+  const aadhaar = sanitizeAadhaar(request.data?.aadhaar);
+  const source = normalizeText(request.data?.source || "identity_submission", 80);
+  const identity = await upsertAadhaarIdentity({ userId: uid, aadhaar, source });
+
+  const userRef = db.collection("users").doc(uid);
+  await userRef.set({
+    ...aadhaarProfileMutation(identity),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  const snap = await userRef.get();
+  return {
+    ok: true,
+    profile: profileResponse(snap.data() || {}, request.auth.token.phone_number || ""),
+  };
+});
+
+exports.revealAadhaarBreakGlass = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only superadmin can reveal Aadhaar in break-glass mode.");
+  }
+
+  let aadhaarRefId = normalizeText(request.data?.aadhaarRefId, 120);
+  const targetUserId = normalizeText(request.data?.targetUserId, 120);
+  const bookingId = normalizeText(request.data?.bookingId, 120);
+  const reason = normalizeText(request.data?.reason, 500);
+
+  if (reason.length < 20) {
+    throw new HttpsError("invalid-argument", "A detailed reason with at least 20 characters is required.");
+  }
+
+  let resolvedTargetUserId = targetUserId;
+  if (!aadhaarRefId && bookingId) {
+    const bookingSnap = await db.collection("bookings").doc(bookingId).get();
+    if (!bookingSnap.exists) {
+      throw new HttpsError("not-found", "Booking not found.");
+    }
+    const booking = bookingSnap.data() || {};
+    aadhaarRefId = String(booking.aadhaarRefId ?? "").trim();
+    resolvedTargetUserId = resolvedTargetUserId || String(booking.userId ?? "").trim();
+  }
+
+  if (!aadhaarRefId && resolvedTargetUserId) {
+    const userSnap = await db.collection("users").doc(resolvedTargetUserId).get();
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User not found.");
+    }
+    aadhaarRefId = String(userSnap.data()?.aadhaarRefId ?? "").trim();
+  }
+
+  if (!aadhaarRefId) {
+    throw new HttpsError("invalid-argument", "Aadhaar reference ID, user ID, or booking ID is required.");
+  }
+
+  const vaultRef = db.collection(AADHAAR_VAULT_COLLECTION).doc(aadhaarRefId);
+  const vaultSnap = await vaultRef.get();
+  if (!vaultSnap.exists) {
+    throw new HttpsError("not-found", "Aadhaar vault record not found.");
+  }
+
+  const vaultData = vaultSnap.data() || {};
+  const vaultUserId = String(vaultData.userId ?? "").trim();
+  if (resolvedTargetUserId && vaultUserId && vaultUserId !== resolvedTargetUserId) {
+    throw new HttpsError("failed-precondition", "Aadhaar reference does not match the target user.");
+  }
+
+  const aadhaar = decryptAadhaar(vaultData);
+  const revealExpiresInSeconds = 60;
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: "superadmin",
+    action: "aadhaar_break_glass_revealed",
+    entityType: "identity",
+    entityId: aadhaarRefId,
+    metadata: {
+      targetUserId: resolvedTargetUserId || vaultUserId || null,
+      bookingId: bookingId || null,
+      reason,
+      ipKey: fingerprint(requestIp(request)),
+      revealExpiresInSeconds,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    aadhaarRefId,
+    targetUserId: resolvedTargetUserId || vaultUserId || "",
+    aadhaar,
+    last4: String(vaultData.last4 ?? aadhaar.slice(-4)),
+    revealExpiresInSeconds,
   };
 });
 
@@ -566,6 +852,120 @@ exports.recordPrivilegedAction = onCall({ cors: true }, async (request) => {
   return { ok: true };
 });
 
+exports.getPlatformSettings = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerRole = await getCurrentRole(request.auth.uid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can read platform settings.");
+  }
+
+  const settings = await readPlatformSettings();
+  return {
+    ok: true,
+    settings,
+  };
+});
+
+exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only superadmin can update platform settings.");
+  }
+
+  const input = request.data || {};
+  if (!Object.prototype.hasOwnProperty.call(input, "checkInGraceMinutes")) {
+    throw new HttpsError("invalid-argument", "checkInGraceMinutes is required.");
+  }
+  const nextCheckInGraceMinutes = clampCheckInGraceMinutes(input.checkInGraceMinutes);
+
+  const settingsRef = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
+  await settingsRef.set({
+    checkInGraceMinutes: nextCheckInGraceMinutes,
+    updatedBy: callerUid,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "platform_settings_updated",
+    entityType: "access",
+    entityId: PLATFORM_SETTINGS_DOC_ID,
+    metadata: {
+      checkInGraceMinutes: nextCheckInGraceMinutes,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    settings: {
+      checkInGraceMinutes: nextCheckInGraceMinutes,
+    },
+  };
+});
+
+exports.setCityScarcityMode = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can update scarcity mode.");
+  }
+
+  const cityId = normalizeText(request.data?.cityId, 120);
+  if (!cityId) {
+    throw new HttpsError("invalid-argument", "cityId is required.");
+  }
+
+  const enabled = Boolean(request.data?.enabled);
+  const cityRef = db.collection("cities").doc(cityId);
+  const citySnap = await cityRef.get();
+  if (!citySnap.exists) {
+    throw new HttpsError("not-found", "City not found.");
+  }
+
+  const scarcityValue = enabled ? randomInt(SCARCITY_MIN_BEDS, SCARCITY_MAX_BEDS) : null;
+  const updateData = {
+    scarcityEnabled: enabled,
+    scarcityMin: SCARCITY_MIN_BEDS,
+    scarcityMax: SCARCITY_MAX_BEDS,
+    scarcityValue: scarcityValue,
+    scarcityUpdatedAtMs: Date.now(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await cityRef.set(updateData, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: enabled ? "city_scarcity_enabled" : "city_scarcity_disabled",
+    entityType: "city",
+    entityId: cityId,
+    metadata: {
+      scarcityMin: SCARCITY_MIN_BEDS,
+      scarcityMax: SCARCITY_MAX_BEDS,
+      scarcityValue,
+      refreshWindowMinutes: 15,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    cityId,
+    scarcityEnabled: enabled,
+    scarcityValue,
+    scarcityMin: SCARCITY_MIN_BEDS,
+    scarcityMax: SCARCITY_MAX_BEDS,
+  };
+});
+
 exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
   const userId = request.auth.uid;
@@ -577,6 +977,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   const requirementBedType = normalizedBedTypeRequirement(input.requirementBedType);
   const selectedBed = input.selectedBed || {};
   const requestedBedId = String(selectedBed.bedId ?? "").trim();
+  const submittedAadhaar = sanitizeAadhaar(input.aadhaar ?? input.aadhaarNumber ?? "");
 
   if (!propertyId) {
     throw new HttpsError("invalid-argument", "Invalid listing selected for booking.");
@@ -590,6 +991,33 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
     throw new HttpsError("failed-precondition", "Check-in time cannot be in the past.");
   }
   const requestedEndMillis = Number.POSITIVE_INFINITY;
+
+  const userRef = db.collection("users").doc(userId);
+  const [userSnap, previousBookingsSnap] = await Promise.all([
+    userRef.get(),
+    db.collection("bookings").where("userId", "==", userId).limit(1).get(),
+  ]);
+  const userData = userSnap.data() || {};
+  let aadhaarRefId = String(userData.aadhaarRefId ?? "").trim();
+  let aadhaarStatus = String(userData.aadhaarStatus ?? "").trim();
+
+  if (submittedAadhaar) {
+    const identity = await upsertAadhaarIdentity({
+      userId,
+      aadhaar: submittedAadhaar,
+      source: previousBookingsSnap.empty ? "first_booking_optional" : "repeat_booking_required",
+    });
+    await userRef.set({
+      ...aadhaarProfileMutation(identity),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    aadhaarRefId = identity.aadhaarRefId;
+    aadhaarStatus = identity.aadhaarStatus;
+  }
+
+  if (!previousBookingsSnap.empty && !aadhaarRefId) {
+    throw new HttpsError("failed-precondition", "Aadhaar reference is required from your second booking onward.");
+  }
 
   const bedsSnapshot = await db.collection("beds").where("propertyId", "==", propertyId).get();
   const blocksSnapshot = await db.collection("bed_blocks").where("propertyId", "==", propertyId).get();
@@ -720,6 +1148,8 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         checkInAt,
         checkOutAt: null,
         bookingStatus: "confirmed",
+        aadhaarRefId: aadhaarRefId || null,
+        identityStatusAtBooking: aadhaarRefId ? aadhaarStatus || "submitted" : "not_required_first_booking",
         ownerCheckoutAlert: false,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -759,6 +1189,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
           bedId: chosenBed.bedId,
           bedCode: chosenBed.bedCode,
           bedType: chosenBed.bedType,
+          aadhaarRefAttached: Boolean(aadhaarRefId),
           attemptCount: rate.count,
         },
         createdAt: FieldValue.serverTimestamp(),
@@ -972,6 +1403,99 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
   };
 });
 
+exports.submitBookingRating = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const userId = request.auth.uid;
+  const bookingId = String(request.data?.bookingId ?? "").trim();
+  const ratingOverall = Number(request.data?.ratingOverall ?? 0);
+  const ratingComment = normalizeRatingComment(request.data?.ratingComment ?? "");
+
+  if (!bookingId) {
+    throw new HttpsError("invalid-argument", "bookingId is required.");
+  }
+  if (!Number.isInteger(ratingOverall) || ratingOverall < 1 || ratingOverall > 5) {
+    throw new HttpsError("invalid-argument", "Rating must be between 1 and 5.");
+  }
+
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  let bookingCode = bookingId;
+  let nextBedRatingAverage = 0;
+  let nextBedRatingCount = 0;
+
+  await db.runTransaction(async (transaction) => {
+    const bookingSnap = await transaction.get(bookingRef);
+    if (!bookingSnap.exists) {
+      throw new HttpsError("not-found", "Booking not found.");
+    }
+
+    const booking = bookingSnap.data() || {};
+    bookingCode = String(booking.bookingCode ?? bookingId);
+    if (String(booking.userId ?? "") !== userId) {
+      throw new HttpsError("permission-denied", "You can rate only your own booking.");
+    }
+    if (String(booking.bookingStatus ?? "").toLowerCase() !== "completed") {
+      throw new HttpsError("failed-precondition", "Only completed bookings can be rated.");
+    }
+    if (Number(booking.ratingOverall ?? 0) > 0 || booking.ratingSubmittedAt) {
+      throw new HttpsError("already-exists", "This booking has already been rated.");
+    }
+
+    const bedId = String(booking.bedId ?? "").trim();
+    const bedRef = bedId ? db.collection("beds").doc(bedId) : null;
+    const bedSnap = bedRef ? await transaction.get(bedRef) : null;
+    const bed = bedSnap?.exists ? bedSnap.data() || {} : {};
+    const currentCount = Math.max(0, Number(bed.ratingCount ?? 0));
+    const currentAverage = Math.max(0, Number(bed.ratingAverage ?? 0));
+    const currentTotal = Number.isFinite(Number(bed.ratingTotal))
+      ? Number(bed.ratingTotal)
+      : currentAverage * currentCount;
+    const nextTotal = currentTotal + ratingOverall;
+    nextBedRatingCount = currentCount + 1;
+    nextBedRatingAverage = Math.round((nextTotal / nextBedRatingCount) * 10) / 10;
+
+    transaction.update(bookingRef, {
+      ratingOverall,
+      ratingComment,
+      ratingStatus: "submitted",
+      ratingSubmittedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (bedRef && bedSnap?.exists) {
+      transaction.set(bedRef, {
+        ratingAverage: nextBedRatingAverage,
+        ratingCount: nextBedRatingCount,
+        ratingTotal: nextTotal,
+        lastRatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: userId,
+      actorRole: "consumer",
+      action: "booking_rated",
+      entityType: "booking",
+      entityId: bookingId,
+      metadata: {
+        bedId,
+        ratingOverall,
+        hasComment: ratingComment.length > 0,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {
+    ok: true,
+    bookingId,
+    bookingCode,
+    ratingOverall,
+    bedRatingAverage: nextBedRatingAverage,
+    bedRatingCount: nextBedRatingCount,
+  };
+});
+
 exports.detectPaymentStatusAnomaly = onDocumentUpdated("payments/{paymentId}", async (event) => {
   const before = event.data?.before?.data() || null;
   const after = event.data?.after?.data() || null;
@@ -1063,4 +1587,126 @@ exports.detectPaymentStatusAnomaly = onDocumentUpdated("payments/{paymentId}", a
     },
     createdAt: FieldValue.serverTimestamp(),
   });
+});
+
+exports.refreshCityScarcityValues = onSchedule("every 15 minutes", async () => {
+  const citiesSnap = await db.collection("cities").where("scarcityEnabled", "==", true).get();
+  if (citiesSnap.empty) {
+    return { ok: true, refreshed: 0 };
+  }
+
+  const batch = db.batch();
+  let refreshed = 0;
+  citiesSnap.docs.forEach((cityDoc) => {
+    const data = cityDoc.data() || {};
+    const min = Number.isFinite(Number(data.scarcityMin)) ? Number(data.scarcityMin) : SCARCITY_MIN_BEDS;
+    const max = Number.isFinite(Number(data.scarcityMax)) ? Number(data.scarcityMax) : SCARCITY_MAX_BEDS;
+    const safeMin = Math.max(SCARCITY_MIN_BEDS, Math.min(SCARCITY_MAX_BEDS, Math.round(min)));
+    const safeMax = Math.max(safeMin, Math.min(SCARCITY_MAX_BEDS, Math.round(max)));
+    const scarcityValue = randomInt(safeMin, safeMax);
+
+    batch.set(cityDoc.ref, {
+      scarcityValue,
+      scarcityUpdatedAtMs: Date.now(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    refreshed += 1;
+  });
+  await batch.commit();
+
+  await db.collection("audit_logs").add({
+    actorUserId: "system",
+    actorRole: "system",
+    action: "city_scarcity_refreshed",
+    entityType: "city",
+    entityId: "all_enabled_cities",
+    metadata: {
+      refreshed,
+      refreshWindowMinutes: 15,
+      min: SCARCITY_MIN_BEDS,
+      max: SCARCITY_MAX_BEDS,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, refreshed };
+});
+
+exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {
+  const settings = await readPlatformSettings();
+  const graceMinutes = clampCheckInGraceMinutes(settings.checkInGraceMinutes);
+  const graceMs = graceMinutes * 60 * 1000;
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const confirmedSnap = await db.collection("bookings").where("bookingStatus", "==", "confirmed").get();
+  if (confirmedSnap.empty) {
+    return { ok: true, cancelled: 0, graceMinutes };
+  }
+
+  let cancelled = 0;
+  let opCount = 0;
+  let batch = db.batch();
+
+  async function flushBatch() {
+    if (opCount === 0) {
+      return;
+    }
+    await batch.commit();
+    batch = db.batch();
+    opCount = 0;
+  }
+
+  for (const bookingDoc of confirmedSnap.docs) {
+    const booking = bookingDoc.data() || {};
+    const checkInMs = toMillisOrNull(booking.checkInAt);
+    if (checkInMs === null) {
+      continue;
+    }
+    if (nowMs < checkInMs + graceMs) {
+      continue;
+    }
+
+    const bookingRef = bookingDoc.ref;
+    const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingDoc.id);
+
+    batch.set(bookingRef, {
+      bookingStatus: "cancelled",
+      cancelReason: "no_check_in_timeout",
+      cancelledAt: nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    batch.set(bookingAvailabilityRef, {
+      propertyId: String(booking.propertyId ?? ""),
+      bedId: String(booking.bedId ?? ""),
+      checkInAt: String(booking.checkInAt ?? ""),
+      checkOutAt: nowIso,
+      bookingStatus: "cancelled",
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    batch.set(db.collection("audit_logs").doc(), {
+      actorUserId: "system",
+      actorRole: "system",
+      action: "booking_auto_cancelled_no_check_in",
+      entityType: "booking",
+      entityId: bookingDoc.id,
+      metadata: {
+        graceMinutes,
+        checkInAt: String(booking.checkInAt ?? ""),
+        cancelledAt: nowIso,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    cancelled += 1;
+    opCount += 3;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  await flushBatch();
+  return { ok: true, cancelled, graceMinutes };
 });
