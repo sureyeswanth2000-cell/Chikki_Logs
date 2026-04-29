@@ -27,10 +27,11 @@
 - [x] Prefer manual role-by-role verification first, then automate the highest-value cases later
 - [x] Re-run this checklist after any auth, role, or redirect change
 - [x] Add a 30-second OTP resend flow for consumers and keep the resend button disabled until the timer ends
-- [ ] Fix OTP state reset when phone number is edited: old OTP attempt/timer state is still counted, and the UI does not reset to show a fresh Send OTP button for the new number
-- [ ] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app
+- [x] Fix OTP state reset when phone number is edited: old OTP attempt/timer state is still counted, and the UI does not reset to show a fresh Send OTP button for the new number
+- [ ] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app — repo workflow is ready; pending manual GitHub Firebase production deploy and live verification
 - [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error)
-- [ ] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
+- [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
+- [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise
 
 ## Security (2026-04-24 Audit Complete)
 - [x] **CRITICAL: Audit missing route protections** - Found 4 unprotected pages
@@ -109,8 +110,22 @@
 ## Product / Documentation
 - [x] Rename canonical book to Chikki Masterbook
 - [x] Update the Chikki Masterbook for operator role hierarchy and hidden superadmin flow
-- [ ] Add deployment and environment checklist to docs
+- [x] Add deployment and environment checklist to docs
 - [ ] Expand work log with future completed milestones
+
+## Autonomous SRE & Dev Pipeline (Future)
+- [ ] Design 6-hour self-healing monitoring loop for Firebase logs using n8n on Cloud Run
+- [ ] Query Google Cloud Logging for Firebase Data Connect and Firestore errors from the last 6 hours
+- [ ] Add Gemini 2.5 Flash log analysis step to summarize root cause and required fix
+- [ ] Build n8n to Jira handoff that creates remediation tickets when Gemini identifies a valid bug
+- [ ] Add `ai-remediation-pending` Jira label and assignment path for GitHub Copilot remediation
+- [ ] Define Copilot remediation workflow for Data Connect migrations, Functions changes, and test execution
+- [ ] Deploy AI-generated fixes to Firebase Hosting Preview Channels before production
+- [ ] Add Antigravity E2E verification against preview URLs with bug-specific browser actions
+- [ ] Add human-in-the-loop Antigravity dashboard artifact with `PUSH TO PROD` approval
+- [ ] Enforce SQL safety: Data Connect schema changes must include generated migration scripts
+- [ ] Store Jira, GitHub, Gemini, and Antigravity secrets in Google Secret Manager for n8n
+- [ ] Generate the initial n8n JSON workflow for Firebase log analysis and Jira ticket creation
 
 ## City Management
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access

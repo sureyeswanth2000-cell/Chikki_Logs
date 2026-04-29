@@ -68,7 +68,7 @@ export function SiteChrome({ children }) {
       >
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-5 py-3 md:px-6">
           {/* Logo - Start */}
-          <Link href="/" className="group flex items-center gap-2">
+          <Link href="/" prefetch={false} className="group flex items-center gap-2">
             <Image
               src="/Chikki_Logs/window.svg"
               alt="Demo"
@@ -132,6 +132,7 @@ export function SiteChrome({ children }) {
                     <Link
                       key={item.href}
                       href={item.href}
+                      prefetch={false}
                       onClick={() => setMenuOpen(false)}
                       className={[
                         "block rounded-lg px-3 py-2 text-sm font-medium transition",
@@ -157,6 +158,7 @@ export function SiteChrome({ children }) {
                     </div>
                     <Link
                       href={profileHref}
+                      prefetch={false}
                       onClick={() => setMenuOpen(false)}
                       className="block rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
                     >
@@ -174,6 +176,7 @@ export function SiteChrome({ children }) {
                   <div className="grid gap-2 p-1">
                     <Link
                       href="/login"
+                      prefetch={false}
                       onClick={() => setMenuOpen(false)}
                       className="flex h-10 items-center justify-center rounded-lg bg-slate-900 text-sm font-semibold text-white transition hover:bg-slate-800"
                     >
@@ -181,6 +184,7 @@ export function SiteChrome({ children }) {
                     </Link>
                     <Link
                       href="/register"
+                      prefetch={false}
                       onClick={() => setMenuOpen(false)}
                       className="flex h-10 items-center justify-center rounded-lg border border-slate-200 text-sm font-semibold text-slate-900 transition hover:bg-slate-50"
                     >
@@ -192,6 +196,7 @@ export function SiteChrome({ children }) {
                 <div className="mt-2 border-t border-slate-100 pt-2">
                   <Link
                     href="/apply-owner"
+                    prefetch={false}
                     onClick={() => setMenuOpen(false)}
                     className="block rounded-lg px-3 py-2 text-sm font-semibold text-sky-600 transition hover:bg-sky-50"
                   >
@@ -219,30 +224,35 @@ export function SiteChrome({ children }) {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Link
               href="/"
+              prefetch={false}
               className="text-slate-600 transition hover:text-slate-900"
             >
               Home
             </Link>
             <Link
               href="/login"
+              prefetch={false}
               className="text-slate-600 transition hover:text-slate-900"
             >
               Login
             </Link>
             <Link
               href="/register"
+              prefetch={false}
               className="text-slate-600 transition hover:text-slate-900"
             >
               Register
             </Link>
             <Link
               href="/history"
+              prefetch={false}
               className="text-slate-600 transition hover:text-slate-900"
             >
               History
             </Link>
             <Link
               href="/apply-owner"
+              prefetch={false}
               className="text-slate-600 transition hover:text-slate-900"
             >
               Apply as Owner

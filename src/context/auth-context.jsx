@@ -21,7 +21,7 @@ import { authorizeOtpRequest, ensureConsumerProfile, updateOwnProfile } from "@/
 const AuthContext = createContext(null);
 
 const PROFILE_CACHE_KEY = "chikki_profile_cache";
-const OTP_COOLDOWN_UNTIL_KEY = "chikki_otp_cooldown_until";
+const OTP_COOLDOWNS_BY_PHONE_KEY = "chikki_otp_cooldowns_by_phone";
 const OTP_SEND_COOLDOWN_SECONDS = 30;
 const OTP_RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60;
 const OTP_EXPIRY_SECONDS = 5 * 60;
@@ -69,24 +69,57 @@ function clearCachedProfile() {
     window.localStorage.removeItem(PROFILE_CACHE_KEY);
 }
 
-function readOtpCooldownUntil() {
+function readOtpCooldownsByPhone() {
     if (typeof window === "undefined") {
+        return {};
+    }
+    const raw = window.localStorage.getItem(OTP_COOLDOWNS_BY_PHONE_KEY);
+    if (!raw) {
+        return {};
+    }
+    try {
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            return {};
+        }
+        return Object.fromEntries(Object.entries(parsed)
+            .map(([phone, value]) => [phone, Number(value ?? 0)])
+            .filter(([phone, value]) => phone && Number.isFinite(value) && value > Date.now()));
+    }
+    catch {
+        return {};
+    }
+}
+
+function readOtpCooldownUntil(phoneNumber) {
+    if (!phoneNumber) {
         return 0;
     }
-    const raw = window.localStorage.getItem(OTP_COOLDOWN_UNTIL_KEY);
-    const value = Number(raw ?? 0);
+    const cooldowns = readOtpCooldownsByPhone();
+    const value = Number(cooldowns[phoneNumber] ?? 0);
     return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-function writeOtpCooldownUntil(value) {
+function writeOtpCooldownUntil(phoneNumber, value) {
     if (typeof window === "undefined") {
         return;
     }
-    if (value <= 0) {
-        window.localStorage.removeItem(OTP_COOLDOWN_UNTIL_KEY);
+    if (!phoneNumber) {
         return;
     }
-    window.localStorage.setItem(OTP_COOLDOWN_UNTIL_KEY, String(value));
+    const cooldowns = readOtpCooldownsByPhone();
+    if (value <= 0) {
+        delete cooldowns[phoneNumber];
+    }
+    else {
+        cooldowns[phoneNumber] = value;
+    }
+    if (Object.keys(cooldowns).length === 0) {
+        window.localStorage.removeItem(OTP_COOLDOWNS_BY_PHONE_KEY);
+    }
+    else {
+        window.localStorage.setItem(OTP_COOLDOWNS_BY_PHONE_KEY, JSON.stringify(cooldowns));
+    }
 }
 
 function getReadableAuthError(error) {
@@ -210,6 +243,7 @@ export function AuthProvider({ children }) {
     const [lastOtpPhoneNumber, setLastOtpPhoneNumber] = useState("");
     const [lastOtpIsTestNumber, setLastOtpIsTestNumber] = useState(false);
     const [otpExpiresAtMs, setOtpExpiresAtMs] = useState(0);
+    const [otpCooldownPhoneNumber, setOtpCooldownPhoneNumber] = useState("");
     const [otpCooldownUntilMs, setOtpCooldownUntilMs] = useState(0);
     const [clockNowMs, setClockNowMs] = useState(Date.now());
     const confirmationRef = useRef(null);
@@ -232,10 +266,6 @@ export function AuthProvider({ children }) {
     }, []);
 
     useEffect(() => {
-        setOtpCooldownUntilMs(readOtpCooldownUntil());
-    }, []);
-
-    useEffect(() => {
         const timer = window.setInterval(() => {
             setClockNowMs(Date.now());
         }, 1000);
@@ -246,10 +276,11 @@ export function AuthProvider({ children }) {
 
     useEffect(() => {
         if (otpCooldownUntilMs > 0 && otpCooldownUntilMs <= clockNowMs) {
+            writeOtpCooldownUntil(otpCooldownPhoneNumber, 0);
+            setOtpCooldownPhoneNumber("");
             setOtpCooldownUntilMs(0);
-            writeOtpCooldownUntil(0);
         }
-    }, [clockNowMs, otpCooldownUntilMs]);
+    }, [clockNowMs, otpCooldownPhoneNumber, otpCooldownUntilMs]);
 
     useEffect(() => {
         if (otpExpiresAtMs > 0 && otpExpiresAtMs <= clockNowMs) {
@@ -362,17 +393,17 @@ export function AuthProvider({ children }) {
     const sendOtp = useCallback(async (rawPhone) => {
         let auth, phoneNumber;
         try {
-            const effectiveCooldownUntil = Math.max(otpCooldownUntilMs, readOtpCooldownUntil());
+            phoneNumber = normalizePhone(rawPhone);
+            console.log("[OTP] Starting sendOtp with phone:", rawPhone);
+            console.log("[OTP] Normalized phone:", phoneNumber);
+
+            const effectiveCooldownUntil = readOtpCooldownUntil(phoneNumber);
             if (effectiveCooldownUntil > Date.now()) {
                 const secondsLeft = Math.ceil((effectiveCooldownUntil - Date.now()) / 1000);
+                setOtpCooldownPhoneNumber(phoneNumber);
                 setOtpCooldownUntilMs(effectiveCooldownUntil);
                 throw new Error(`Please wait ${secondsLeft}s before requesting another OTP.`);
             }
-
-            console.log("[OTP] Starting sendOtp with phone:", rawPhone);
-            
-            phoneNumber = normalizePhone(rawPhone);
-            console.log("[OTP] Normalized phone:", phoneNumber);
 
             // Server-side abuse checks before OTP dispatch.
             const authz = await authorizeOtpRequest(phoneNumber);
@@ -409,8 +440,9 @@ export function AuthProvider({ children }) {
             setLastOtpIsTestNumber(isTestNumber);
             setOtpExpiresAtMs(Date.now() + OTP_EXPIRY_SECONDS * 1000);
             const nextCooldownUntil = Date.now() + OTP_SEND_COOLDOWN_SECONDS * 1000;
+            setOtpCooldownPhoneNumber(phoneNumber);
             setOtpCooldownUntilMs(nextCooldownUntil);
-            writeOtpCooldownUntil(nextCooldownUntil);
+            writeOtpCooldownUntil(phoneNumber, nextCooldownUntil);
             return { phoneNumber, isTestNumber };
         }
         catch (error) {
@@ -437,8 +469,9 @@ export function AuthProvider({ children }) {
                     setLastOtpIsTestNumber(false);
                     setOtpExpiresAtMs(Date.now() + OTP_EXPIRY_SECONDS * 1000);
                     const nextCooldownUntil = Date.now() + OTP_SEND_COOLDOWN_SECONDS * 1000;
+                    setOtpCooldownPhoneNumber(phoneNumber);
                     setOtpCooldownUntilMs(nextCooldownUntil);
-                    writeOtpCooldownUntil(nextCooldownUntil);
+                    writeOtpCooldownUntil(phoneNumber, nextCooldownUntil);
                     return { phoneNumber, isTestNumber: false };
                 }
                 catch (retryError) {
@@ -449,13 +482,14 @@ export function AuthProvider({ children }) {
             else {
                 if (errorCode === "auth/too-many-requests") {
                     const nextCooldownUntil = Date.now() + OTP_RATE_LIMIT_COOLDOWN_SECONDS * 1000;
+                    setOtpCooldownPhoneNumber(phoneNumber);
                     setOtpCooldownUntilMs(nextCooldownUntil);
-                    writeOtpCooldownUntil(nextCooldownUntil);
+                    writeOtpCooldownUntil(phoneNumber, nextCooldownUntil);
                 }
                 throw new Error(getReadableAuthError(error));
             }
         }
-    }, [clearRecaptcha, otpCooldownUntilMs, setupRecaptcha]);
+    }, [clearRecaptcha, setupRecaptcha]);
     const verifyOtp = useCallback(async (otpCode) => {
         if (!confirmationRef.current) {
             throw new Error("Send OTP first.");
@@ -491,6 +525,8 @@ export function AuthProvider({ children }) {
         setLastOtpPhoneNumber("");
         setLastOtpIsTestNumber(false);
         setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
     }, [otpExpiresAtMs]);
     const signInWithGoogle = useCallback(async () => {
@@ -528,6 +564,8 @@ export function AuthProvider({ children }) {
         setLastOtpPhoneNumber("");
         setLastOtpIsTestNumber(false);
         setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
     }, [clearRecaptcha]);
@@ -567,6 +605,8 @@ export function AuthProvider({ children }) {
         setLastOtpPhoneNumber("");
         setLastOtpIsTestNumber(false);
         setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
         return mappedProfile;
@@ -600,6 +640,11 @@ export function AuthProvider({ children }) {
         setProfile(mappedProfile);
         writeCachedProfile(mappedProfile);
         setOtpSent(false);
+        setLastOtpPhoneNumber("");
+        setLastOtpIsTestNumber(false);
+        setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
         return mappedProfile;
@@ -664,6 +709,8 @@ export function AuthProvider({ children }) {
         setLastOtpPhoneNumber("");
         setLastOtpIsTestNumber(false);
         setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
         clearCachedProfile();
         clearRecaptcha();
@@ -674,6 +721,8 @@ export function AuthProvider({ children }) {
         setLastOtpPhoneNumber("");
         setLastOtpIsTestNumber(false);
         setOtpExpiresAtMs(0);
+        setOtpCooldownPhoneNumber("");
+        setOtpCooldownUntilMs(0);
         confirmationRef.current = null;
         clearRecaptcha();
     }, [clearRecaptcha]);

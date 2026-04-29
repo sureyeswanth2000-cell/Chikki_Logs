@@ -1,6 +1,6 @@
 # Chikki Masterbook
 
-Last updated: 2026-04-26
+Last updated: 2026-04-29
 Audience: Founders + Builders
 Role: Canonical internal operating manual for Chikki Beds
 
@@ -17,6 +17,13 @@ Use it when you need to answer:
 - Which product and technical decisions are already fixed
 
 This book should be updated whenever product rules, architecture, user flows, or strategic priorities change.
+
+## Current Deployment Rule
+- Local laptop is development.
+- GitHub `main` is the test/source-of-truth branch.
+- Firebase is production.
+- Firebase production deploys are manual-only from GitHub Actions on `main`.
+- Direct local-to-Firebase production deploys should be avoided except for explicit emergency recovery.
 
 ## 1. Vision And Market Context
 

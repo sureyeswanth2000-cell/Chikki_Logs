@@ -1,5 +1,29 @@
 # Work Log
 
+## 2026-04-29
+
+### Completed
+- Started Phase 1 production stabilization before payment work.
+- Fixed phone OTP state handling:
+  - client cooldowns are now stored per normalized phone number
+  - editing the phone number clears the active OTP attempt, OTP expiry, visible cooldown state, and reCAPTCHA verifier
+  - an old phone number's client cooldown no longer blocks sending OTP to a different number
+- Cleaned the Firebase production deployment path:
+  - Firebase production deploy is now manual-only from GitHub Actions on `main`
+  - production deploy installs web and Functions dependencies
+  - production deploy builds the static app with Firebase public env secrets
+  - production deploy prepares the `/Chikki_Logs` hosting base path
+  - production deploy generates `functions/.env` from the `AADHAAR_VAULT_ENCRYPTION_KEY` GitHub secret
+  - production deploy includes hosting, Functions, and Firestore rules together
+- Removed the obsolete GitHub Pages workflow for the deleted `test` branch.
+- Reduced likely static-export RSC 404 noise by disabling Next prefetch on shared header/menu/footer navigation links.
+- Added `docs/DEPLOYMENT_ENVIRONMENT_CHECKLIST.md`.
+- Expanded auth checklist with OTP edit, rating, callable deployment, CORS, and RSC network checks.
+
+### Verification Notes
+- Before this stabilization deploy, Firebase production did not list `submitBookingRating`; that explains why the history rating failure looked like a CORS/preflight problem.
+- Live rating verification remains pending until the manual GitHub Firebase production deploy runs from `main`.
+
 ## 2026-04-26
 
 ### Completed

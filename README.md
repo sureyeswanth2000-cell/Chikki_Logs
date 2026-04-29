@@ -3,6 +3,7 @@
 ## Canonical Product Documentation
 - Chikki Masterbook: [docs/CHIKKI_MASTERBOOK.md](./docs/CHIKKI_MASTERBOOK.md)
 - Auth test checklist: [docs/AUTH_TEST_CHECKLIST.md](./docs/AUTH_TEST_CHECKLIST.md)
+- Deployment and environment checklist: [docs/DEPLOYMENT_ENVIRONMENT_CHECKLIST.md](./docs/DEPLOYMENT_ENVIRONMENT_CHECKLIST.md)
 
 Website-first MVP for bed booking platform with three role views:
 - Consumer
@@ -35,6 +36,7 @@ Important:
 - `.env.example` is safe to commit and is only a template.
 - Keep production Firebase credentials out of tracked files.
 - After auth or routing changes, run the end-to-end auth checklist in `docs/AUTH_TEST_CHECKLIST.md`.
+- Deploy Firebase production only through the manual GitHub Actions workflow on `main`.
 
 For city seeding, also provide Firebase Admin credentials in .env.local:
 
@@ -136,6 +138,7 @@ firebase deploy --only firestore:rules
 
 ## Next Implementation Targets
 - Manual end-to-end auth verification for every role
+- Manual GitHub Firebase production deploy and live rating verification
 - Production MFA/second-approval guard for Aadhaar break-glass reveal
 - Production payment gateway integration
 - Superadmin live KPI cards

@@ -62,6 +62,12 @@ Before testing:
 - confirm public UI does not expose the hidden path
 
 ## Edge Cases
+- send phone OTP, choose "Edit phone number", change to a different number, and confirm the UI returns to a fresh Send OTP state
+- confirm an OTP cooldown for the old phone number does not block sending OTP to the new phone number
+- submit a rating for one completed booking from `/history` and confirm it cannot be submitted twice
+- after production deploy, confirm `submitBookingRating` is listed by `firebase functions:list --project chikki-logs-72607`
+- after production deploy, confirm booking-history rating has no browser CORS/preflight error
+- watch browser network logs while navigating shared menu/footer links and confirm repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise is reduced
 - wait 4 seconds on profile load and confirm timeout handling works
 - test the `/unauthorized` page for clear recovery guidance
 - use the back button after an unauthorized redirect and confirm the user does not get trapped
