@@ -11,6 +11,16 @@
   --accent-strong: #0369a1;
 }
 
+:root[data-theme="dark"] {
+  --background: #0b1120;
+  --foreground: #e5eefb;
+  --muted-foreground: #9fb0c7;
+  --surface: #111827;
+  --surface-soft: #172033;
+  --accent: #38bdf8;
+  --accent-strong: #7dd3fc;
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -44,10 +54,23 @@ h4 {
     radial-gradient(circle at 50% 88%, rgba(125, 211, 252, 0.2), transparent 44%);
 }
 
+:root[data-theme="dark"] .aurora-bg {
+  background:
+    radial-gradient(circle at 10% 10%, rgba(56, 189, 248, 0.18), transparent 34%),
+    radial-gradient(circle at 88% 18%, rgba(14, 165, 233, 0.12), transparent 36%),
+    linear-gradient(180deg, #0b1120 0%, #111827 100%);
+}
+
 .glass-card {
   background: color-mix(in srgb, var(--surface) 92%, white 8%);
   border: 1px solid rgba(148, 163, 184, 0.32);
   box-shadow: 0 18px 45px -30px rgba(15, 23, 42, 0.4);
+}
+
+:root[data-theme="dark"] .glass-card {
+  background: color-mix(in srgb, var(--surface) 88%, black 12%);
+  border-color: rgba(148, 163, 184, 0.24);
+  box-shadow: 0 18px 45px -30px rgba(0, 0, 0, 0.8);
 }
 
 .shine-button {

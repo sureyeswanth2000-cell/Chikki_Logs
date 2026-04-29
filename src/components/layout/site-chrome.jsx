@@ -2,7 +2,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/context/auth-context";
 
 const basePrimaryNav = [
@@ -14,11 +14,10 @@ const basePrimaryNav = [
 ];
 
 const ownerPrimaryNav = [
-  { href: "/owner", label: "Owner Portal" },
-  { href: "/consumer", label: "Switch to Consumer Mode" },
-  { href: "/owner/beds", label: "Create Inventory" },
-  { href: "/owner/property-status", label: "Inventory Status" },
-  { href: "/history", label: "Service History" },
+  { href: "/owner", label: "Dashboard" },
+  { href: "/owner#active-bookings", label: "Bookings" },
+  { href: "/owner#bed-control", label: "Inventory" },
+  { href: "/owner#earnings", label: "Earnings" },
   { href: "/support", label: "Support" },
 ];
 
@@ -36,6 +35,12 @@ function isActive(pathname, href) {
 export function SiteChrome({ children }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [theme, setTheme] = useState(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+    return window.localStorage.getItem("chikki_theme") === "dark" ? "dark" : "light";
+  });
   const { user, profile, signOutUser } = useAuth();
 
   const primaryNav =
@@ -47,6 +52,18 @@ export function SiteChrome({ children }) {
 
   const profileLabel = profile?.name || user?.phoneNumber || "Profile";
   const profileHref = user ? "/profile" : "/login";
+  const isOwner = profile?.role === "owner";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  function toggleTheme() {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+    setTheme(nextTheme);
+    document.documentElement.dataset.theme = nextTheme;
+    window.localStorage.setItem("chikki_theme", nextTheme);
+  }
 
   async function handleSignOut() {
     await signOutUser();
@@ -151,6 +168,15 @@ export function SiteChrome({ children }) {
                   Account
                 </div>
 
+                <button
+                  type="button"
+                  onClick={toggleTheme}
+                  className="mb-2 flex h-10 w-full items-center justify-between rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+                  <span aria-hidden="true">{theme === "dark" ? "On" : "Off"}</span>
+                </button>
+
                 {user ? (
                   <>
                     <div className="mb-2 px-3 text-xs text-slate-500">
@@ -164,6 +190,16 @@ export function SiteChrome({ children }) {
                     >
                       My Profile
                     </Link>
+                    {isOwner ? (
+                      <Link
+                        href="/consumer"
+                        prefetch={false}
+                        onClick={() => setMenuOpen(false)}
+                        className="block rounded-lg px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
+                      >
+                        Switch to Consumer Mode
+                      </Link>
+                    ) : null}
                     <button
                       type="button"
                       onClick={handleSignOut}
@@ -193,16 +229,18 @@ export function SiteChrome({ children }) {
                   </div>
                 )}
 
-                <div className="mt-2 border-t border-slate-100 pt-2">
-                  <Link
-                    href="/apply-owner"
-                    prefetch={false}
-                    onClick={() => setMenuOpen(false)}
-                    className="block rounded-lg px-3 py-2 text-sm font-semibold text-sky-600 transition hover:bg-sky-50"
-                  >
-                    Apply as Owner
-                  </Link>
-                </div>
+                {!isOwner ? (
+                  <div className="mt-2 border-t border-slate-100 pt-2">
+                    <Link
+                      href="/apply-owner"
+                      prefetch={false}
+                      onClick={() => setMenuOpen(false)}
+                      className="block rounded-lg px-3 py-2 text-sm font-semibold text-sky-600 transition hover:bg-sky-50"
+                    >
+                      Apply as Owner
+                    </Link>
+                  </div>
+                ) : null}
               </nav>
             </div>
           </>

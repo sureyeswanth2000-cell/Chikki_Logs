@@ -3,6 +3,25 @@
 ## 2026-04-29
 
 ### Completed
+- Started owner-dashboard completion before payment work:
+  - simplified owner navigation to Dashboard, Bookings, Inventory, Earnings, and Support
+  - removed owner-facing Apply as Owner menu placement and moved Switch to Consumer Mode into account/dashboard context
+  - added light/dark mode toggle in the shared app menu
+  - rebuilt the owner dashboard around active bookings first, future bookings second, checkout pending, earnings on demand, bed control, pending properties, and collapsed inventory details
+  - added owner search suggestions for owner-accessible actions such as active bookings, earnings, add bed, block bed, support, and profile
+  - added lazy earnings loading for today, week, month, and custom date range
+  - added simple bed Block/Unblock controls in owner inventory without the long scheduled block form
+  - added Add Property, Add Room, Add Bed, and Add All actions from the owner dashboard
+  - added anchors on the create-inventory page so add actions can route to the right form section
+
+### Notes
+- Earnings currently show owner-facing expected/paid booking totals without exposing Chikki contribution or commission breakdown.
+- Property approval for newly added owner properties is still open and should be implemented before payment.
+- Map/property creation UX is still open and should be redesigned in the next owner-dashboard pass.
+
+## 2026-04-29
+
+### Completed
 - Started Phase 1 production stabilization before payment work.
 - Fixed phone OTP state handling:
   - client cooldowns are now stored per normalized phone number

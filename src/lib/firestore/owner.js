@@ -600,6 +600,100 @@ export async function getOwnerUpcomingBookings(ownerId) {
     };
 }
 
+export async function getOwnerEarningsSummary(ownerId, filters = {}) {
+    if (!ownerId) {
+        return {
+            bookingCount: 0,
+            expectedEarnings: 0,
+            paidAmount: 0,
+            pendingAmount: 0,
+        };
+    }
+
+    const propertyItems = await getOwnerProperties(ownerId);
+    const propertyIds = propertyItems.map((item) => item.id).filter(Boolean);
+    if (propertyIds.length === 0) {
+        return {
+            bookingCount: 0,
+            expectedEarnings: 0,
+            paidAmount: 0,
+            pendingAmount: 0,
+        };
+    }
+
+    const fromMs = filters.fromDate ? new Date(filters.fromDate).setHours(0, 0, 0, 0) : null;
+    const toMs = filters.toDate ? new Date(filters.toDate).setHours(23, 59, 59, 999) : null;
+
+    const bookingSnapshots = await Promise.all(
+        chunkArray(propertyIds, 10).map((batch) =>
+            getDocs(query(collection(db, COLLECTIONS.bookings), where("propertyId", "in", batch)))
+        )
+    );
+
+    const bookings = bookingSnapshots.flatMap((snapshot) =>
+        snapshot.docs
+            .map((item) => {
+                const data = item.data();
+                const checkInAt = String(data.checkInAt ?? "");
+                const checkInMs = toMillisFromDateTime(checkInAt);
+                return {
+                    id: item.id,
+                    bookingStatus: String(data.bookingStatus ?? ""),
+                    checkInMs,
+                };
+            })
+            .filter((item) => {
+                const status = item.bookingStatus.toLowerCase();
+                if (status === "cancelled") {
+                    return false;
+                }
+                if (fromMs !== null && (item.checkInMs === null || item.checkInMs < fromMs)) {
+                    return false;
+                }
+                if (toMs !== null && (item.checkInMs === null || item.checkInMs > toMs)) {
+                    return false;
+                }
+                return true;
+            })
+    );
+
+    const bookingIds = bookings.map((item) => item.id);
+    if (bookingIds.length === 0) {
+        return {
+            bookingCount: 0,
+            expectedEarnings: 0,
+            paidAmount: 0,
+            pendingAmount: 0,
+        };
+    }
+
+    const paymentSnapshots = await Promise.all(
+        chunkArray(bookingIds, 10).map((batch) =>
+            getDocs(query(collection(db, COLLECTIONS.payments), where("bookingId", "in", batch)))
+        )
+    );
+
+    const payments = paymentSnapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.data()));
+    const expectedEarnings = payments.reduce((sum, payment) => sum + Number(payment.totalAmount ?? 0), 0);
+    const paidAmount = payments.reduce((sum, payment) => {
+        const total = Number(payment.totalAmount ?? 0);
+        const advance = Number(payment.advancePaid ?? 0);
+        const remaining = Number(payment.remainingPaid ?? 0);
+        const status = String(payment.paymentStatus ?? "").toLowerCase();
+        if (status === "settled" || status === "paid") {
+            return sum + total;
+        }
+        return sum + advance + (status === "pending_settlement" ? 0 : remaining);
+    }, 0);
+
+    return {
+        bookingCount: bookings.length,
+        expectedEarnings,
+        paidAmount,
+        pendingAmount: Math.max(expectedEarnings - paidAmount, 0),
+    };
+}
+
 export async function getOwnerCheckoutAlerts(ownerId) {
     if (!ownerId) {
         return [];

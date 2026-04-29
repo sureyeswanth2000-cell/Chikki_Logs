@@ -362,7 +362,7 @@ export default function OwnerBedsPage() {
             )}
 
             <section className="mt-8 grid gap-6 lg:grid-cols-2">
-                <article className="glass-card animate-stagger rounded-2xl p-6 lg:col-span-2">
+                <article id="add-property" className="glass-card animate-stagger scroll-mt-24 rounded-2xl p-6 lg:col-span-2">
                     <h2 className="text-lg font-semibold">Create Property</h2>
                     <p className="mt-1 text-xs text-slate-500">Pick exact location directly on map. Nearby bus stand and railway distances auto-calculate.</p>
                     <form className="mt-4 grid gap-3" onSubmit={handleCreateProperty}>
@@ -403,7 +403,7 @@ export default function OwnerBedsPage() {
                     </form>
                 </article>
 
-                <article className="glass-card animate-stagger rounded-2xl p-6">
+                <article id="add-room" className="glass-card animate-stagger scroll-mt-24 rounded-2xl p-6">
                     <h2 className="text-lg font-semibold">Create Room</h2>
                     <form className="mt-4 grid gap-3" onSubmit={handleCreateRoom}>
                         <select value={roomForm.propertyId} onChange={(e) => setRoomForm((prev) => ({ ...prev, propertyId: e.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" required>
@@ -418,7 +418,7 @@ export default function OwnerBedsPage() {
                     </form>
                 </article>
 
-                <article className="glass-card animate-stagger rounded-2xl p-6">
+                <article id="add-bed" className="glass-card animate-stagger scroll-mt-24 rounded-2xl p-6">
                     <h2 className="text-lg font-semibold">Create Bed</h2>
                     <p className="mt-1 text-xs text-slate-500">Set owner prices here. Consumer listing and booking uses these prices.</p>
                     <form className="mt-4 grid gap-3" onSubmit={handleCreateBed}>
@@ -446,7 +446,7 @@ export default function OwnerBedsPage() {
                     </form>
                 </article>
 
-                <article className="glass-card animate-stagger rounded-2xl p-6 lg:col-span-2">
+                <article id="add-block" className="glass-card animate-stagger scroll-mt-24 rounded-2xl p-6 lg:col-span-2">
                     <h2 className="text-lg font-semibold">Create Bed Block</h2>
                     <form className="mt-4 grid gap-3" onSubmit={handleCreateBlock}>
                         <select value={blockForm.propertyId} onChange={(e) => setBlockForm((prev) => ({ ...prev, propertyId: e.target.value, roomId: "", bedId: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" required>

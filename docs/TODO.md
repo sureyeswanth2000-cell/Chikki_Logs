@@ -94,7 +94,7 @@
 - [ ] Remove hardcoded default platform commission percentage from bed prices — operator/superadmin should set a per-owner revenue share percentage during owner onboarding or approval
 - [ ] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
-- [ ] Owner dashboard should show owner earnings/revenue received summaries by day, week, and month
+- [x] Owner dashboard should show owner earnings/revenue received summaries by day, week, and month
 - [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
 - [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
@@ -107,11 +107,12 @@
 
 ## UX / UI
 - [ ] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
-- [ ] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
+- [x] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
+- [x] Add dark and light mode toggle for the app shell
 - [ ] Improve overall UX across login, booking, and profile completion
 - [ ] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
-- [ ] Owner inventory list pages should end with clear Add actions for Add Property, Add Room, Add Bed, and Add All; clicking each action should route to the correct create flow instead of making owners hunt through the page
+- [x] Owner inventory list pages should end with clear Add actions for Add Property, Add Room, Add Bed, and Add All; clicking each action should route to the correct create flow instead of making owners hunt through the page
 - [ ] Rethink the Create Property map UI: current map looks poor/blank and needs clearer tiles/loading state, better sizing, and a more confidence-building exact-location selection flow
 - [ ] Polish UI after flow stability is confirmed
 - [ ] Improve current-location UX so it feels intentional and premium
@@ -162,7 +163,7 @@
 
 ## Bed Blocking & Extended Stay
 - [ ] Keep a booking open and the bed blocked until BOTH owner AND consumer have confirmed checkout — do not release the bed until both sides confirm
-- [ ] Owner should have simple manual bed block/unblock buttons without selecting start time, end time, property, room, and bed through a long flow
+- [x] Owner should have simple manual bed block/unblock buttons without selecting start time, end time, property, room, and bed through a long flow
 - [ ] After the originally booked duration ends and the stay is extended, apply hourly pricing automatically — charge the owner's configured hourly rate per additional hour
 - [ ] Add operator-controlled toggle: "First-hour new-user pricing" — when enabled, charge a separately configured first-hour price for first-time users instead of the standard hourly rate; operator can enable or disable this per-property or globally
 - [ ] Add alert system: send an in-app notification (and optionally SMS/email) to the consumer when their booked time is about to expire, warning them to check out or extend
