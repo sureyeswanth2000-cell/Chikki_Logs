@@ -94,7 +94,7 @@
 - [ ] Remove hardcoded default platform commission percentage from bed prices — operator/superadmin should set a per-owner revenue share percentage during owner onboarding or approval
 - [ ] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
-- [x] Owner dashboard and earnings page should show owner received earnings by today, week, month, custom date, and total since starting
+- [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings
 - [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
 - [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
@@ -110,7 +110,7 @@
 - [x] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [x] Add dark and light mode toggle for the app shell
-- [x] Keep owner dashboard focused on active bookings, future bookings, and checkout pending; move earnings, inventory, and bed controls to their own pages
+- [x] Keep owner dashboard focused on active bookings, future bookings, and checkout pending; move earnings, inventory, and bed controls to their own pages to reduce unnecessary database reads
 - [x] Fix dark-mode contrast for shared cards, tables, forms, and fixed Tailwind color utilities so text remains readable
 - [ ] Add a proper background picture/visual treatment later so the header/home area does not feel blank
 - [ ] Improve overall UX across login, booking, and profile completion

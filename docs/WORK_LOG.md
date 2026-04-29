@@ -7,8 +7,8 @@
   - simplified owner navigation to Dashboard, Inventory, Earnings, and Support
   - removed owner-facing Apply as Owner menu placement and moved Switch to Consumer Mode into account/dashboard context
   - added light/dark mode toggle in the shared app menu
-  - corrected the owner dashboard to focus on active bookings, future bookings, checkout pending, and owner earnings
-  - added owner earnings on dashboard and `/owner/earnings` with today, week, month, custom date, and total received since starting
+  - corrected the owner dashboard to focus on active bookings, future bookings, and checkout pending only
+  - kept owner earnings on the dedicated `/owner/earnings` page with today, week, month, custom date, and total received since starting so Firestore reads happen only when the owner requests earnings
   - moved simple bed Block/Unblock controls to the top of the owner inventory page without the long scheduled block form
   - added Add Property, Add Room, Add Bed, and Add All actions from owner inventory
   - added anchors on the create-inventory page so add actions can route to the right form section
@@ -18,6 +18,7 @@
 
 ### Notes
 - Earnings currently show owner-facing expected/paid booking totals without exposing Chikki contribution or commission breakdown.
+- Owner dashboard intentionally does not load earnings to avoid unnecessary database reads.
 - Header/home background image treatment is intentionally left for a later design pass.
 - Property approval for newly added owner properties is still open and should be implemented before payment.
 - Map/property creation UX is still open and should be redesigned in the next owner-dashboard pass.
