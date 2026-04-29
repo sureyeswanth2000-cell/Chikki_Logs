@@ -140,12 +140,15 @@ export default function OwnerPropertyStatusPage() {
             <div className="glass-card animate-rise rounded-2xl p-6">
                 <div className="flex items-center justify-between gap-3">
                     <div>
-                        <h1 className="text-3xl font-bold">Inventory Status</h1>
-                        <p className="mt-1 text-xs text-slate-500">Manage status for properties, rooms, beds, and blocks.</p>
+                        <h1 className="text-3xl font-bold">Inventory</h1>
+                        <p className="mt-1 text-xs text-slate-500">Block beds first, then manage properties and rooms when needed.</p>
                     </div>
                     <div className="flex gap-2">
                         <Link href="/owner" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
-                            Owner Portal
+                            Dashboard
+                        </Link>
+                        <Link href="/owner/beds" className="rounded-full border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700 hover:bg-sky-50 transition">
+                            Add Inventory
                         </Link>
                         <Link href="/profile" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
                             Edit Profile
@@ -160,6 +163,51 @@ export default function OwnerPropertyStatusPage() {
             {notice && (
                 <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>
             )}
+
+            <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
+                <h2 className="text-lg font-semibold">Bed Control</h2>
+                <p className="mt-1 text-sm text-slate-500">Quick block or unblock for day-to-day owner control.</p>
+                {loading ? <p className="mt-3 text-sm text-slate-500">Loading...</p> : (
+                    <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead>
+                                <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                                    <th className="pb-2 text-left font-semibold">Bed</th>
+                                    <th className="pb-2 text-left font-semibold">Room</th>
+                                    <th className="pb-2 text-left font-semibold">Type</th>
+                                    <th className="pb-2 text-left font-semibold">Owner Price</th>
+                                    <th className="pb-2 text-left font-semibold">Status</th>
+                                    <th className="pb-2 text-left font-semibold">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {beds.map((bed) => {
+                                    const room = rooms.find((item) => item.id === bed.roomId);
+                                    return (
+                                        <tr key={bed.id}>
+                                            <td className="py-2 font-medium">{bed.bedCode}</td>
+                                            <td className="py-2 text-slate-600">{room?.roomName ?? "-"}</td>
+                                            <td className="py-2 text-slate-600">{bed.bedType}</td>
+                                            <td className="py-2 text-slate-600">H:{bed.hourlyPrice} / ON:{bed.overnightPrice} / OD:{bed.overdayPrice}</td>
+                                            <td className="py-2">
+                                                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${bed.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                                                    {bed.active ? "Available" : "Blocked"}
+                                                </span>
+                                            </td>
+                                            <td className="py-2">
+                                                <button type="button" onClick={() => void handleToggleBed(bed.id, bed.active)} disabled={saving} className={`rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-60 ${bed.active ? "border-rose-300 text-rose-700 hover:bg-rose-50" : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"}`}>
+                                                    {bed.active ? "Block" : "Unblock"}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                        {beds.length === 0 ? <p className="mt-3 text-sm text-slate-500">No beds yet.</p> : null}
+                    </div>
+                )}
+            </section>
 
             <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
                 <h2 className="text-lg font-semibold">Property Status</h2>
@@ -204,43 +252,6 @@ export default function OwnerPropertyStatusPage() {
             </section>
 
             <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
-                <h2 className="text-lg font-semibold">Bed Status</h2>
-                {loading ? <p className="mt-3 text-sm text-slate-500">Loading...</p> : (
-                    <div className="mt-4 overflow-x-auto">
-                        <table className="w-full text-sm">
-                            <thead>
-                                <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
-                                    <th className="pb-2 text-left font-semibold">Bed</th>
-                                    <th className="pb-2 text-left font-semibold">Room</th>
-                                    <th className="pb-2 text-left font-semibold">Type</th>
-                                    <th className="pb-2 text-left font-semibold">Owner Price</th>
-                                    <th className="pb-2 text-left font-semibold">Action</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {beds.map((bed) => {
-                                    const room = rooms.find((item) => item.id === bed.roomId);
-                                    return (
-                                        <tr key={bed.id}>
-                                            <td className="py-2 font-medium">{bed.bedCode}</td>
-                                            <td className="py-2 text-slate-600">{room?.roomName ?? "-"}</td>
-                                            <td className="py-2 text-slate-600">{bed.bedType}</td>
-                                            <td className="py-2 text-slate-600">H:{bed.hourlyPrice} / ON:{bed.overnightPrice} / OD:{bed.overdayPrice}</td>
-                                            <td className="py-2">
-                                                <button type="button" onClick={() => void handleToggleBed(bed.id, bed.active)} disabled={saving} className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60">
-                                                    {bed.active ? "Disable" : "Enable"}
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </section>
-
-            <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
                 <h2 className="text-lg font-semibold">Bed Block Status</h2>
                 {loading ? <p className="mt-3 text-sm text-slate-500">Loading...</p> : bedBlocks.length === 0 ? (
                     <p className="mt-3 text-sm text-slate-500">No active blocks found.</p>
@@ -261,6 +272,25 @@ export default function OwnerPropertyStatusPage() {
                         })}
                     </ul>
                 )}
+            </section>
+
+            <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
+                <h2 className="text-lg font-semibold">Add Inventory</h2>
+                <p className="mt-1 text-sm text-slate-500">Create property, room, and bed records from the dedicated inventory form.</p>
+                <div className="mt-4 flex flex-wrap gap-2">
+                    <Link href="/owner/beds#add-property" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
+                        Add Property
+                    </Link>
+                    <Link href="/owner/beds#add-room" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
+                        Add Room
+                    </Link>
+                    <Link href="/owner/beds#add-bed" className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition">
+                        Add Bed
+                    </Link>
+                    <Link href="/owner/beds" className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 transition">
+                        Add All
+                    </Link>
+                </div>
             </section>
         </main>
     );

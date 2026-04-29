@@ -15,9 +15,8 @@ const basePrimaryNav = [
 
 const ownerPrimaryNav = [
   { href: "/owner", label: "Dashboard" },
-  { href: "/owner#active-bookings", label: "Bookings" },
-  { href: "/owner#bed-control", label: "Inventory" },
-  { href: "/owner#earnings", label: "Earnings" },
+  { href: "/owner/property-status", label: "Inventory" },
+  { href: "/owner/earnings", label: "Earnings" },
   { href: "/support", label: "Support" },
 ];
 
