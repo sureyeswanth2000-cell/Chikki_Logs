@@ -15,6 +15,8 @@
   - expanded dark-mode overrides for shared cards, tables, forms, and fixed color utilities so text remains readable
   - added root static export files with `.nojekyll` so GitHub Pages branch publishing can serve the app routes while the repository keeps one `main` branch
   - removed duplicate owner-dashboard shortcut buttons, moved mode switching into the shared header, restored Home in owner navigation, and moved Sign Out into Profile
+  - fixed owner earnings filters so selected ranges show only that period, with all-time earnings available as an explicit range option
+  - added inline owner bed price editing from Inventory / Bed Control for hourly, overnight, and overday prices
 
 ### Notes
 - Earnings currently show owner-facing expected/paid booking totals without exposing Chikki contribution or commission breakdown.

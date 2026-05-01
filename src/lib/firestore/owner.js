@@ -265,6 +265,31 @@ export async function toggleBedActive(bedId, active) {
         updatedAt: serverTimestamp(),
     });
 }
+export async function updateBedPrices(ownerId, bedId, payload) {
+    const hourlyPrice = Number(payload.hourlyPrice);
+    const overnightPrice = Number(payload.overnightPrice);
+    const overdayPrice = Number(payload.overdayPrice);
+    if ([hourlyPrice, overnightPrice, overdayPrice].some((value) => Number.isNaN(value) || value <= 0)) {
+        throw new Error("All bed prices must be greater than 0.");
+    }
+
+    const bedRef = doc(db, COLLECTIONS.beds, bedId);
+    const bedSnap = await getDoc(bedRef);
+    if (!bedSnap.exists()) {
+        throw new Error("Bed not found.");
+    }
+    const bedData = bedSnap.data();
+    if (String(bedData.ownerId ?? "") !== ownerId) {
+        throw new Error("You can update only your own bed prices.");
+    }
+
+    await updateDoc(bedRef, {
+        hourlyPrice: Math.round(hourlyPrice),
+        overnightPrice: Math.round(overnightPrice),
+        overdayPrice: Math.round(overdayPrice),
+        updatedAt: serverTimestamp(),
+    });
+}
 export async function createBedBlock(ownerId, payload) {
     await addDoc(collection(db, COLLECTIONS.bedBlocks), {
         ownerId,

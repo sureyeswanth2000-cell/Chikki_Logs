@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import {
@@ -11,6 +11,7 @@ import {
     toggleBedActive,
     togglePropertyActive,
     toggleRoomActive,
+    updateBedPrices,
     updateRoomTotalBeds,
 } from "@/lib/firestore/owner";
 
@@ -21,6 +22,8 @@ export default function OwnerPropertyStatusPage() {
     const [beds, setBeds] = useState([]);
     const [bedBlocks, setBedBlocks] = useState([]);
     const [roomCapacityDrafts, setRoomCapacityDrafts] = useState({});
+    const [bedPriceDrafts, setBedPriceDrafts] = useState({});
+    const [editingBedId, setEditingBedId] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState(null);
@@ -42,6 +45,11 @@ export default function OwnerPropertyStatusPage() {
             setBeds(bedItems);
             setBedBlocks(blockItems);
             setRoomCapacityDrafts(Object.fromEntries(roomItems.map((room) => [room.id, String(room.totalBeds)])));
+            setBedPriceDrafts(Object.fromEntries(bedItems.map((bed) => [bed.id, {
+                hourlyPrice: String(bed.hourlyPrice),
+                overnightPrice: String(bed.overnightPrice),
+                overdayPrice: String(bed.overdayPrice),
+            }])));
         } catch (err) {
             setError(err instanceof Error ? err.message : "Failed to load status data.");
         } finally {
@@ -124,6 +132,48 @@ export default function OwnerPropertyStatusPage() {
         }
     }
 
+    function handleEditBedPrices(bed) {
+        setEditingBedId(bed.id);
+        setBedPriceDrafts((prev) => ({
+            ...prev,
+            [bed.id]: {
+                hourlyPrice: String(bed.hourlyPrice),
+                overnightPrice: String(bed.overnightPrice),
+                overdayPrice: String(bed.overdayPrice),
+            },
+        }));
+        setError(null);
+        setNotice(null);
+    }
+
+    function handlePriceDraftChange(bedId, field, value) {
+        setBedPriceDrafts((prev) => ({
+            ...prev,
+            [bedId]: {
+                ...(prev[bedId] ?? {}),
+                [field]: value,
+            },
+        }));
+    }
+
+    async function handleUpdateBedPrices(bedId) {
+        if (!user?.uid) return;
+        const draft = bedPriceDrafts[bedId] ?? {};
+        setSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            await updateBedPrices(user.uid, bedId, draft);
+            setNotice("Bed prices updated.");
+            setEditingBedId(null);
+            await loadData();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Could not update bed prices.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
     if (!user) {
         return (
             <main className="mx-auto min-h-screen max-w-4xl px-6 py-16">
@@ -183,23 +233,63 @@ export default function OwnerPropertyStatusPage() {
                             <tbody className="divide-y divide-slate-100">
                                 {beds.map((bed) => {
                                     const room = rooms.find((item) => item.id === bed.roomId);
+                                    const draft = bedPriceDrafts[bed.id] ?? {
+                                        hourlyPrice: String(bed.hourlyPrice),
+                                        overnightPrice: String(bed.overnightPrice),
+                                        overdayPrice: String(bed.overdayPrice),
+                                    };
                                     return (
-                                        <tr key={bed.id}>
-                                            <td className="py-2 font-medium">{bed.bedCode}</td>
-                                            <td className="py-2 text-slate-600">{room?.roomName ?? "-"}</td>
-                                            <td className="py-2 text-slate-600">{bed.bedType}</td>
-                                            <td className="py-2 text-slate-600">H:{bed.hourlyPrice} / ON:{bed.overnightPrice} / OD:{bed.overdayPrice}</td>
-                                            <td className="py-2">
-                                                <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${bed.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                                                    {bed.active ? "Available" : "Blocked"}
-                                                </span>
-                                            </td>
-                                            <td className="py-2">
-                                                <button type="button" onClick={() => void handleToggleBed(bed.id, bed.active)} disabled={saving} className={`rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-60 ${bed.active ? "border-rose-300 text-rose-700 hover:bg-rose-50" : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"}`}>
-                                                    {bed.active ? "Block" : "Unblock"}
-                                                </button>
-                                            </td>
-                                        </tr>
+                                        <Fragment key={bed.id}>
+                                            <tr>
+                                                <td className="py-2 font-medium">{bed.bedCode}</td>
+                                                <td className="py-2 text-slate-600">{room?.roomName ?? "-"}</td>
+                                                <td className="py-2 text-slate-600">{bed.bedType}</td>
+                                                <td className="py-2 text-slate-600">H:{bed.hourlyPrice} / ON:{bed.overnightPrice} / OD:{bed.overdayPrice}</td>
+                                                <td className="py-2">
+                                                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${bed.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                                                        {bed.active ? "Available" : "Blocked"}
+                                                    </span>
+                                                </td>
+                                                <td className="py-2">
+                                                    <div className="flex flex-wrap gap-2">
+                                                        <button type="button" onClick={() => handleEditBedPrices(bed)} disabled={saving} className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60">
+                                                            Edit Price
+                                                        </button>
+                                                        <button type="button" onClick={() => void handleToggleBed(bed.id, bed.active)} disabled={saving} className={`rounded-full border px-3 py-1 text-xs font-semibold disabled:opacity-60 ${bed.active ? "border-rose-300 text-rose-700 hover:bg-rose-50" : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"}`}>
+                                                            {bed.active ? "Block" : "Unblock"}
+                                                        </button>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                            {editingBedId === bed.id ? (
+                                                <tr className="bg-slate-50/70">
+                                                    <td colSpan={6} className="py-3">
+                                                        <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-[1fr_1fr_1fr_auto] md:items-end">
+                                                            <label className="text-xs font-semibold text-slate-600">
+                                                                Hourly
+                                                                <input type="number" min={1} value={draft.hourlyPrice} onChange={(event) => handlePriceDraftChange(bed.id, "hourlyPrice", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                                            </label>
+                                                            <label className="text-xs font-semibold text-slate-600">
+                                                                Overnight
+                                                                <input type="number" min={1} value={draft.overnightPrice} onChange={(event) => handlePriceDraftChange(bed.id, "overnightPrice", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                                            </label>
+                                                            <label className="text-xs font-semibold text-slate-600">
+                                                                Overday
+                                                                <input type="number" min={1} value={draft.overdayPrice} onChange={(event) => handlePriceDraftChange(bed.id, "overdayPrice", event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                                                            </label>
+                                                            <div className="flex gap-2">
+                                                                <button type="button" onClick={() => void handleUpdateBedPrices(bed.id)} disabled={saving} className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-700 disabled:opacity-60">
+                                                                    Save
+                                                                </button>
+                                                                <button type="button" onClick={() => setEditingBedId(null)} disabled={saving} className="rounded-full border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                                                                    Cancel
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            ) : null}
+                                        </Fragment>
                                     );
                                 })}
                             </tbody>

@@ -10,6 +10,9 @@ function formatDate(value) {
 }
 
 function getEarningsRange(rangeKey, customFromDate, customToDate) {
+    if (rangeKey === "all_time") {
+        return {};
+    }
     if (rangeKey === "custom") {
         return { fromDate: customFromDate, toDate: customToDate };
     }
@@ -43,12 +46,6 @@ export default function OwnerEarningsPage() {
         paidAmount: 0,
         pendingAmount: 0,
     });
-    const [totalSummary, setTotalSummary] = useState({
-        bookingCount: 0,
-        expectedEarnings: 0,
-        paidAmount: 0,
-        pendingAmount: 0,
-    });
 
     async function handleLoadEarnings(event) {
         event.preventDefault();
@@ -57,19 +54,15 @@ export default function OwnerEarningsPage() {
             return;
         }
         const range = getEarningsRange(earningsRange, customFromDate, customToDate);
-        if (!range.fromDate || !range.toDate) {
+        if (earningsRange === "custom" && (!range.fromDate || !range.toDate)) {
             setError("Choose a valid date range.");
             return;
         }
         setLoading(true);
         setError(null);
         try {
-            const [data, totalData] = await Promise.all([
-                getOwnerEarningsSummary(user.uid, range),
-                getOwnerEarningsSummary(user.uid, {}),
-            ]);
+            const data = await getOwnerEarningsSummary(user.uid, range);
             setSummary(data);
-            setTotalSummary(totalData);
             setLoaded(true);
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : "Could not load earnings.");
@@ -102,6 +95,7 @@ export default function OwnerEarningsPage() {
                             <option value="week">This Week</option>
                             <option value="month">This Month</option>
                             <option value="custom">Custom Date</option>
+                            <option value="all_time">All Time</option>
                         </select>
                         <input
                             type="date"
@@ -128,7 +122,7 @@ export default function OwnerEarningsPage() {
 
                     {!loaded ? (
                         <div className="mt-6 rounded-xl border border-slate-200 bg-white px-4 py-4 text-sm text-slate-600">
-                            Select today, week, month, or custom date and load earnings.
+                            Select today, week, month, custom date, or all time and load earnings.
                         </div>
                     ) : (
                         <div className="mt-6 grid gap-4 md:grid-cols-4">
@@ -141,12 +135,12 @@ export default function OwnerEarningsPage() {
                                 <p className="mt-2 text-3xl font-bold text-slate-900">{money(summary.expectedEarnings)}</p>
                             </div>
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Received</p>
-                                <p className="mt-2 text-3xl font-bold text-sky-700">{money(totalSummary.paidAmount)}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Pending</p>
+                                <p className="mt-2 text-3xl font-bold text-amber-600">{money(summary.pendingAmount)}</p>
                             </div>
                             <div className="rounded-xl border border-slate-200 bg-slate-50 p-5">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total Bookings</p>
-                                <p className="mt-2 text-3xl font-bold text-slate-900">{totalSummary.bookingCount}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Bookings</p>
+                                <p className="mt-2 text-3xl font-bold text-sky-700">{summary.bookingCount}</p>
                             </div>
                         </div>
                     )}
