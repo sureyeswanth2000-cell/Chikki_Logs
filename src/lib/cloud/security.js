@@ -141,3 +141,43 @@ export async function setCityScarcityMode(payload) {
     throw new Error(toMessage(error, "Could not update city scarcity mode."));
   }
 }
+
+export async function updateDemandPricingSettings(payload) {
+  const callable = httpsCallable(functionsClient(), "updateDemandPricingSettings");
+  try {
+    const result = await callable(payload || {});
+    return result.data?.settings || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update demand pricing settings."));
+  }
+}
+
+export async function setDemandScopeOverride(payload) {
+  const callable = httpsCallable(functionsClient(), "setDemandScopeOverride");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update demand override."));
+  }
+}
+
+export async function stopOwnerDemandPricing(payload) {
+  const callable = httpsCallable(functionsClient(), "stopOwnerDemandPricing");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not stop demand pricing."));
+  }
+}
+
+export async function allowOwnerDemandPricing(payload) {
+  const callable = httpsCallable(functionsClient(), "allowOwnerDemandPricing");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not allow demand pricing."));
+  }
+}

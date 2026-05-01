@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { DemandPricingPanel } from "@/components/admin/demand-pricing-panel";
 import { useAuth } from "@/context/auth-context";
 import {
   addCity,
@@ -127,6 +128,7 @@ export default function InternalControlPage() {
   const [searchPhone, setSearchPhone] = useState("");
   const [searchResult, setSearchResult] = useState(null);
   const [selectedRole, setSelectedRole] = useState("consumer");
+  const [ownerRevenueSharePercent, setOwnerRevenueSharePercent] = useState(10);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState(null);
   const [searchNotice, setSearchNotice] = useState(null);
@@ -371,6 +373,7 @@ export default function InternalControlPage() {
       }
       setSearchResult(found);
       setSelectedRole(found.role);
+      setOwnerRevenueSharePercent(Number(found.ownerRevenueSharePercent ?? 10));
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Search failed.");
     } finally {
@@ -384,8 +387,16 @@ export default function InternalControlPage() {
     setSearchNotice(null);
 
     try {
-      const result = await updateManagedUserRole(searchResult.id, selectedRole);
-      setSearchResult((prev) => (prev ? { ...prev, role: selectedRole } : prev));
+      const result = await updateManagedUserRole(
+        searchResult.id,
+        selectedRole,
+        selectedRole === "owner" ? ownerRevenueSharePercent : undefined
+      );
+      setSearchResult((prev) => (prev ? {
+        ...prev,
+        role: selectedRole,
+        ownerRevenueSharePercent: selectedRole === "owner" ? ownerRevenueSharePercent : prev.ownerRevenueSharePercent,
+      } : prev));
       if (result?.changed === false) {
         setSearchNotice("Role was already set to that value.");
       } else {
@@ -445,13 +456,27 @@ export default function InternalControlPage() {
     }
     setAppsNotice(null);
     try {
-      await approveOwnerApplication(application.id, application.userId);
+      const enteredPercent = window.prompt(
+        `Enter agreed revenue share % for ${application.businessName}`,
+        String(application.agreedOwnerRevenueSharePercent ?? 10)
+      );
+      if (enteredPercent === null) {
+        return;
+      }
+      const agreedPercent = Math.max(0, Math.min(100, Number(enteredPercent)));
+      if (Number.isNaN(agreedPercent)) {
+        setAppsNotice("Enter a valid revenue share percentage between 0 and 100.");
+        return;
+      }
+      await approveOwnerApplication(application.id, application.userId, agreedPercent);
       setApplications((prev) =>
         prev.map((item) =>
-          item.id === application.id ? { ...item, _status: "approved" } : item
+          item.id === application.id
+            ? { ...item, _status: "approved", agreedOwnerRevenueSharePercent: agreedPercent }
+            : item
         )
       );
-      setAppsNotice(`${application.businessName} was approved and promoted to Owner.`);
+      setAppsNotice(`${application.businessName} was approved and promoted to Owner with ${agreedPercent}% revenue share.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Approval failed.");
     }
@@ -497,6 +522,7 @@ export default function InternalControlPage() {
             { id: "overview", label: "Overview" },
             { id: "growth", label: "Growth" },
             { id: "settings", label: "Platform Settings" },
+            { id: "demand", label: "Demand Pricing" },
             { id: "roles", label: "Role Control" },
             { id: "identity", label: "Identity Access" },
             { id: "cities", label: "Cities" },
@@ -677,6 +703,12 @@ export default function InternalControlPage() {
           </section>
         ) : null}
 
+        {activeTab === "demand" ? (
+          <div className="mt-6">
+            <DemandPricingPanel />
+          </div>
+        ) : null}
+
         {activeTab === "roles" ? (
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-bold text-slate-800">Role Control</h2>
@@ -751,6 +783,22 @@ export default function InternalControlPage() {
                     Save Role
                   </button>
                 </div>
+                {selectedRole === "owner" ? (
+                  <div className="mt-3 max-w-xs">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Owner Revenue Share %
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={ownerRevenueSharePercent}
+                      onChange={(event) => setOwnerRevenueSharePercent(Number(event.target.value || 0))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                      disabled={searchResult.role === "superadmin"}
+                    />
+                  </div>
+                ) : null}
                 {searchResult.role === "superadmin" ? (
                   <p className="mt-3 text-sm text-amber-700">
                     Existing superadmin accounts are locked from UI changes and must be edited only from the database side.
@@ -1029,6 +1077,7 @@ export default function InternalControlPage() {
                         <p className="text-sm text-slate-600">Phone: {application.phone}</p>
                         <p className="text-sm text-slate-600">City: {application.cityName}</p>
                         <p className="text-sm text-slate-600">Address: {application.propertyAddress}</p>
+                        <p className="text-sm text-slate-600">Proposed Revenue Share: {application.agreedOwnerRevenueSharePercent ?? 10}%</p>
                         {application.description ? (
                           <p className="mt-1 text-sm italic text-slate-500">&quot;{application.description}&quot;</p>
                         ) : null}

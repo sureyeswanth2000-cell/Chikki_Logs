@@ -14,4 +14,7 @@ export const COLLECTIONS = {
     auditLogs: "audit_logs",
     ownerApplications: "owner_applications",
     platformSettings: "platform_settings",
+    demandWatchlist: "demand_watchlist",
+    demandPricing: "demand_pricing",
+    demandOverrides: "demand_overrides",
 };

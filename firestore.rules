@@ -186,5 +186,23 @@ service cloud.firestore {
       allow read: if isInternalOperator();
       allow write: if isSuperadmin();
     }
+
+    match /demand_watchlist/{scopeId} {
+      // Watchlist is backend-maintained operational data.
+      allow read: if isInternalOperator();
+      allow write: if false;
+    }
+
+    match /demand_pricing/{scopeId} {
+      // Consumers will need read access for final price labels; writes stay backend-only.
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
+    match /demand_overrides/{scopeId} {
+      allow read: if isInternalOperator() ||
+        isOwner();
+      allow write: if false;
+    }
   }
 }

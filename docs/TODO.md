@@ -32,6 +32,7 @@
 - [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error)
 - [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
 - [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise
+- [ ] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally
 
 ## Security (2026-04-24 Audit Complete)
 - [x] **CRITICAL: Audit missing route protections** - Found 4 unprotected pages
@@ -92,16 +93,29 @@
 
 ## Pricing & Revenue Model
 - [ ] Remove hardcoded default platform commission percentage from bed prices — operator/superadmin should set a per-owner revenue share percentage during owner onboarding or approval
-- [ ] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
-- [ ] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
+- [x] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
+- [x] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
 - [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings
 - [x] Fix owner earnings date filters: Today, week, month, and custom should show only that period's received/expected amounts, not all-time totals mixed into the selected-period cards
 - [x] Add owner edit-price action for each bed in Inventory / Bed Control so owners can update hourly, overnight, and overday base prices without recreating the bed
-- [ ] Design automatic peak-demand pricing: increase consumer booking cost when demand/traffic is high for a city, area, property, or specific bed, with guardrails and operator/superadmin controls
-- [ ] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
-- [ ] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
-- [ ] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
-- [ ] Operator/superadmin can review and update agreed revenue share % per owner from their console
+- [x] Convert automatic peak-demand pricing discussion into implementation checklist with owner/operator/superadmin rules
+- [x] Add shared peak-demand pricing rule helper for occupancy thresholds, higher-multiplier selection, warnings, caps, and owner-disable expiry
+- [x] Add demand pricing Firestore rules for `demand_watchlist`, `demand_pricing`, `demand_overrides`, and related audit logs
+- [x] Add 15-minute Demand Watchlist backend job: scan city/property occupancy, exclude blocked beds, track only city/property scopes at or above 60% occupancy
+- [x] Add 15-minute Demand Pricing backend job: read `demand_watchlist`, apply thresholds, write city/property demand summaries, and respect emergency disable / owner stop overrides
+- [x] Add callable backend controls for demand pricing settings, internal city/property overrides, owner stop demand, and owner allow demand again
+- [x] Add operator/superadmin peak-pricing settings UI: enable/disable, city/property thresholds, increase %, max cap %, emergency disable, and manual city/property demand controls
+- [x] Add owner demand status UI for own properties: show active demand, reason, increase %, Stop Demand Pricing, and Allow Demand Pricing Again when stopped
+- [x] Implement owner stop-demand override until next business day 06:00 local time; do not restart automatically on the next 15-minute run
+- [x] Show consumer demand warning when city/property occupancy is above 60%: demand is rising and booking now can avoid later price increases
+- [x] Show High Demand labels and demand-adjusted displayed bed prices on listing search and exact booking bed selection without exposing multiplier breakdown to consumers
+- [x] Lock booking price at confirmation time, including any demand multiplier and High Demand label snapshot, so checkout never surprises the consumer
+- [x] Show final all-inclusive bed price with a High Demand label when demand pricing applies; do not expose internal multiplier breakdown to consumers
+- [x] Add demand-pricing audit logs for automatic updates, owner stop/allow, operator/superadmin enable/disable, settings edits, and emergency disable
+- [x] Listing card hourly and overnight prices must be calculated from the owner's configured bed amount plus the owner-specific platform commission/revenue share; do not show stale hardcoded values like fixed INR 150/650
+- [x] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
+- [x] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
+- [x] Operator/superadmin can review and update agreed revenue share % per owner from their console
 
 
 - [ ] Refine first-booking / second-booking Aadhaar UX copy and edge-case handling

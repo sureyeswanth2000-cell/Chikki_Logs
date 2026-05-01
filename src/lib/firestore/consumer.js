@@ -3,7 +3,10 @@ import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
 import { completeCheckout, createBookingWithAdvance as createBookingWithAdvanceCallable, submitBookingRating as submitBookingRatingCallable } from "@/lib/cloud/security";
 import { distanceKmBetween } from "@/lib/geo";
+import { applyDemandMultiplier } from "@/lib/demand-pricing";
 import pilotCities from "../../../data/pilot-cities.json";
+const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = 10;
+const DEFAULT_GATEWAY_FEE_PERCENT = 2;
 function toTime(value) {
     const parsed = new Date(value).getTime();
     if (Number.isNaN(parsed)) {
@@ -29,10 +32,78 @@ function computeBasePrice(duration, bedType, ownerPrices = {}) {
     const acExtra = bedType === "AC" ? 50 : 0;
     return baseByDuration[duration] + acExtra;
 }
-function finalTotalFromBase(basePrice) {
-    const commission = Math.round(basePrice * 0.1);
-    const gateway = Math.round(basePrice * 0.02);
-    return basePrice + commission + gateway;
+
+function clampPercent(value, fallback) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    return Math.max(0, Math.min(100, parsed));
+}
+
+function resolveOwnerRevenueSharePercent(value) {
+    return clampPercent(value, DEFAULT_OWNER_REVENUE_SHARE_PERCENT);
+}
+
+function resolveGatewayFeePercent(value) {
+    return clampPercent(value, DEFAULT_GATEWAY_FEE_PERCENT);
+}
+
+function finalTotalFromBase(basePrice, pricingConfig = {}) {
+    const ownerRevenueSharePercent = resolveOwnerRevenueSharePercent(pricingConfig.ownerRevenueSharePercent);
+    const gatewayFeePercent = resolveGatewayFeePercent(pricingConfig.gatewayFeePercent);
+    const platformRevenueAmount = Math.round(basePrice * (ownerRevenueSharePercent / 100));
+    const gatewayAmount = Math.round(basePrice * (gatewayFeePercent / 100));
+    return basePrice + platformRevenueAmount + gatewayAmount;
+}
+function demandDocId(scope, scopeId) {
+    return `${scope}_${String(scopeId ?? "").trim()}`;
+}
+function normalizeDemandSummary(data, fallbackScope = "") {
+    if (!data) {
+        return {
+            active: false,
+            warningActive: false,
+            multiplierPercent: 0,
+            occupancyPercent: 0,
+            source: fallbackScope,
+            reason: "",
+        };
+    }
+    const active = Boolean(data.active);
+    const warningActive = Boolean(data.warningActive);
+    const multiplierPercent = Math.max(0, Number(data.multiplierPercent ?? 0));
+    const occupancyPercent = Math.max(0, Number(data.occupancyPercent ?? 0));
+    return {
+        active,
+        warningActive: warningActive || occupancyPercent >= 60,
+        multiplierPercent: active ? multiplierPercent : 0,
+        occupancyPercent,
+        source: String(data.scope ?? fallbackScope),
+        reason: String(data.reason ?? ""),
+    };
+}
+async function readDemandSummary(scope, scopeId) {
+    const id = String(scopeId ?? "").trim();
+    if (!id) {
+        return normalizeDemandSummary(null, scope);
+    }
+    const snapshot = await getDoc(doc(db, COLLECTIONS.demandPricing, demandDocId(scope, id)));
+    return normalizeDemandSummary(snapshot.exists() ? snapshot.data() : null, scope);
+}
+function chooseEffectiveDemandSummary(propertySummary, citySummary) {
+    if (propertySummary.active) {
+        return propertySummary;
+    }
+    if (citySummary.active) {
+        return citySummary;
+    }
+    const warningSource = propertySummary.warningActive ? propertySummary : citySummary;
+    return {
+        ...warningSource,
+        active: false,
+        multiplierPercent: 0,
+    };
 }
 function isBlockActiveNow(block) {
     const now = Date.now();
@@ -330,6 +401,7 @@ export async function getListingsByCity(filters) {
     const scarcityValue = Number.isFinite(rawScarcityValue)
         ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
         : 0;
+    const cityDemandSummary = await readDemandSummary("city", filters.cityId);
 
     const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
     const propertySnapshot = await getDocs(propertiesQuery);
@@ -337,6 +409,7 @@ export async function getListingsByCity(filters) {
         const data = item.data();
         return {
             id: item.id,
+            ownerId: String(data.ownerId ?? ""),
             cityId: String(data.cityId ?? ""),
             cityName: String(data.cityName ?? ""),
             name: String(data.name ?? ""),
@@ -349,7 +422,34 @@ export async function getListingsByCity(filters) {
         };
     });
     const listings = [];
+    const ownerPricingCache = new Map();
+
+    async function getOwnerPricing(ownerId) {
+        const key = String(ownerId ?? "").trim();
+        if (!key) {
+            return {
+                ownerRevenueSharePercent: DEFAULT_OWNER_REVENUE_SHARE_PERCENT,
+                gatewayFeePercent: DEFAULT_GATEWAY_FEE_PERCENT,
+            };
+        }
+        if (ownerPricingCache.has(key)) {
+            return ownerPricingCache.get(key);
+        }
+        const ownerSnapshot = await getDoc(doc(db, COLLECTIONS.users, key));
+        const ownerData = ownerSnapshot.exists() ? ownerSnapshot.data() : {};
+        const config = {
+            ownerRevenueSharePercent: resolveOwnerRevenueSharePercent(ownerData?.ownerRevenueSharePercent),
+            gatewayFeePercent: resolveGatewayFeePercent(ownerData?.gatewayFeePercent),
+        };
+        ownerPricingCache.set(key, config);
+        return config;
+    }
+
     for (const property of properties) {
+        const propertyDemandSummary = await readDemandSummary("property", property.id);
+        const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
+        const demandMultiplierPercent = Number(demandSummary.multiplierPercent ?? 0);
+        const pricingConfig = await getOwnerPricing(property.ownerId);
         const roomsQuery = query(collection(db, COLLECTIONS.rooms), where("propertyId", "==", property.id));
         const roomsSnapshot = await getDocs(roomsQuery);
         const rooms = roomsSnapshot.docs.map((item) => {
@@ -416,6 +516,29 @@ export async function getListingsByCity(filters) {
             hourlyPrice: bed.hourlyPrice,
             overnightPrice: bed.overnightPrice,
             overdayPrice: bed.overdayPrice,
+            ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
+            gatewayFeePercent: pricingConfig.gatewayFeePercent,
+            displayHourlyPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("hourly", bed.bedType, {
+                hourlyPrice: bed.hourlyPrice,
+                overnightPrice: bed.overnightPrice,
+                overdayPrice: bed.overdayPrice,
+            }), pricingConfig), demandMultiplierPercent),
+            displayOvernightPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("overnight", bed.bedType, {
+                hourlyPrice: bed.hourlyPrice,
+                overnightPrice: bed.overnightPrice,
+                overdayPrice: bed.overdayPrice,
+            }), pricingConfig), demandMultiplierPercent),
+            displayOverdayPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("overday", bed.bedType, {
+                hourlyPrice: bed.hourlyPrice,
+                overnightPrice: bed.overnightPrice,
+                overdayPrice: bed.overdayPrice,
+            }), pricingConfig), demandMultiplierPercent),
+            demandActive: Boolean(demandSummary.active),
+            demandWarningActive: Boolean(demandSummary.warningActive),
+            demandMultiplierPercent,
+            demandSource: demandSummary.source,
+            demandReason: demandSummary.reason,
+            demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
             ratingAverage: bed.ratingAverage,
             ratingCount: bed.ratingCount,
         }));
@@ -425,21 +548,27 @@ export async function getListingsByCity(filters) {
         if (filteredBedOptions.length === 0) {
             continue;
         }
-        const priceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice(filters.duration, item.bedType, {
+        const basePriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice(filters.duration, item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        })));
-        const hourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {
+        }), pricingConfig));
+        const priceCandidates = basePriceCandidates.map((amount) => applyDemandMultiplier(amount, demandMultiplierPercent));
+        const hourlyPriceCandidates = filteredBedOptions.map((item) => item.displayHourlyPrice);
+        const overnightPriceCandidates = filteredBedOptions.map((item) => item.displayOvernightPrice);
+        const baseHourlyPriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice("hourly", item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        }));
-        const overnightPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("overnight", item.bedType, {
+        }), pricingConfig));
+        const baseOvernightPriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice("overnight", item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        }));
+        }), pricingConfig));
+        const baseMinFinalPrice = Math.min(...basePriceCandidates);
+        const baseMinHourlyPrice = Math.min(...baseHourlyPriceCandidates);
+        const baseMinOvernightPrice = Math.min(...baseOvernightPriceCandidates);
         const minFinalPrice = Math.min(...priceCandidates);
         const minHourlyPrice = Math.min(...hourlyPriceCandidates);
         const minOvernightPrice = Math.min(...overnightPriceCandidates);
@@ -473,9 +602,18 @@ export async function getListingsByCity(filters) {
             scarcityApplied: scarcityEnabled && shownAvailableBeds < realAvailableBeds,
             acBeds: filteredBedOptions.filter((item) => item.bedType === "AC").length,
             nonAcBeds: filteredBedOptions.filter((item) => item.bedType === "NON_AC").length,
+            baseMinFinalPrice,
+            baseMinHourlyPrice,
+            baseMinOvernightPrice,
             minFinalPrice,
             minHourlyPrice,
             minOvernightPrice,
+            demandActive: Boolean(demandSummary.active),
+            demandWarningActive: Boolean(demandSummary.warningActive),
+            demandMultiplierPercent,
+            demandSource: demandSummary.source,
+            demandReason: demandSummary.reason,
+            demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
             ratingAverage: listingRatingAverage,
             ratingCount: totalRatingCount,
             bedOptions: filteredBedOptions,

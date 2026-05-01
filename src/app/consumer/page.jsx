@@ -300,9 +300,18 @@ function ConsumerContent() {
                             ) : (
                                 <p className="mt-2 text-sm text-slate-700">Available Beds: {item.shownAvailableBeds} | AC: {item.acBeds} | Non-AC: {item.nonAcBeds}</p>
                             )}
+                            {item.demandActive ? (
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">High Demand</span>
+                                    <span className="text-xs font-semibold text-amber-700">{String(item.demandSource).toLowerCase() === "city" ? "City demand" : "Property demand"}</span>
+                                </div>
+                            ) : item.demandWarningActive ? (
+                                <p className="mt-2 text-xs font-semibold text-amber-700">Demand is rising. Book now before prices increase.</p>
+                            ) : null}
                             <p className="mt-2 text-sm font-semibold text-slate-900">Hourly from INR {item.minHourlyPrice} | Overnight from INR {item.minOvernightPrice}</p>
+                            <p className="mt-1 text-xs text-slate-500">All-inclusive consumer prices (includes platform and payment fees).</p>
                             <p className="mt-1 text-xs font-semibold text-slate-600">Bed rating: {ratingText(item.ratingAverage, item.ratingCount)}</p>
-                            <p className="mt-1 text-xs text-slate-500">Final amount is calculated at checkout from actual stay time.</p>
+                            <p className="mt-1 text-xs text-slate-500">Checkout uses the booking-time locked rate for actual stay hours.</p>
                             <div className="mt-3 flex gap-2">
                                 <a href={googleMapsDirectionsUrl({ lat: item.lat, lng: item.lng }, nearMeEnabled ? userLocation : null)} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Directions</a>
                                 <button type="button" onClick={() => openBookingPage(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">

@@ -2,7 +2,26 @@ import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimes
 import { getAuth } from "firebase/auth";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
-import { revealAadhaarBreakGlass, setUserRole } from "@/lib/cloud/security";
+import {
+  revealAadhaarBreakGlass,
+  setDemandScopeOverride,
+  setUserRole,
+  updateDemandPricingSettings,
+} from "@/lib/cloud/security";
+
+export const DEFAULT_DEMAND_SETTINGS = {
+  enabled: true,
+  emergencyDisabled: false,
+  globalMaxCapPercent: 100,
+  propertyThresholds: [
+    { minOccupancyPercent: 90, multiplierPercent: 50 },
+    { minOccupancyPercent: 70, multiplierPercent: 20 },
+  ],
+  cityThresholds: [
+    { minOccupancyPercent: 90, multiplierPercent: 100 },
+    { minOccupancyPercent: 80, multiplierPercent: 30 },
+  ],
+};
 
 // Write an audit log directly (avoids undeployed callable)
 async function writeAuditLog(action, entityType, entityId, metadata) {
@@ -171,6 +190,86 @@ export async function getGrowthStats() {
   return { dailyTrend, cityBreakdown };
 }
 
+function normalizeDemandSettings(data = {}) {
+  return {
+    enabled: data.demandPricingEnabled !== false,
+    emergencyDisabled: Boolean(data.demandPricingEmergencyDisabled),
+    globalMaxCapPercent: Number(data.demandPricingGlobalMaxCapPercent ?? DEFAULT_DEMAND_SETTINGS.globalMaxCapPercent),
+    propertyThresholds: Array.isArray(data.demandPricingPropertyThresholds) && data.demandPricingPropertyThresholds.length > 0
+      ? data.demandPricingPropertyThresholds
+      : DEFAULT_DEMAND_SETTINGS.propertyThresholds,
+    cityThresholds: Array.isArray(data.demandPricingCityThresholds) && data.demandPricingCityThresholds.length > 0
+      ? data.demandPricingCityThresholds
+      : DEFAULT_DEMAND_SETTINGS.cityThresholds,
+  };
+}
+
+export async function getDemandPricingSettings() {
+  const snap = await getDoc(doc(db, COLLECTIONS.platformSettings, "main"));
+  return normalizeDemandSettings(snap.exists() ? snap.data() : {});
+}
+
+export async function saveDemandPricingSettings(payload) {
+  const result = await updateDemandPricingSettings(payload);
+  return result ?? DEFAULT_DEMAND_SETTINGS;
+}
+
+export async function getDemandPricingOverview() {
+  const [pricingSnap, overrideSnap] = await Promise.all([
+    getDocs(collection(db, COLLECTIONS.demandPricing)),
+    getDocs(collection(db, COLLECTIONS.demandOverrides)),
+  ]);
+
+  const pricing = pricingSnap.docs
+    .map((item) => {
+      const data = item.data();
+      return {
+        id: item.id,
+        scope: String(data.scope ?? ""),
+        scopeId: String(data.scopeId ?? ""),
+        cityId: String(data.cityId ?? ""),
+        cityName: String(data.cityName ?? ""),
+        propertyId: String(data.propertyId ?? ""),
+        propertyName: String(data.propertyName ?? ""),
+        active: Boolean(data.active),
+        status: String(data.status ?? ""),
+        occupancyPercent: Number(data.occupancyPercent ?? 0),
+        multiplierPercent: Number(data.multiplierPercent ?? 0),
+        warningActive: Boolean(data.warningActive),
+        stoppedByOwner: Boolean(data.stoppedByOwner),
+        reason: String(data.reason ?? ""),
+        calculatedAt: String(data.calculatedAt ?? ""),
+      };
+    })
+    .sort((a, b) => Number(b.active) - Number(a.active) || b.occupancyPercent - a.occupancyPercent);
+
+  const overrides = overrideSnap.docs
+    .map((item) => {
+      const data = item.data();
+      return {
+        id: item.id,
+        scope: String(data.scope ?? ""),
+        scopeId: String(data.scopeId ?? ""),
+        cityId: String(data.cityId ?? ""),
+        cityName: String(data.cityName ?? ""),
+        propertyId: String(data.propertyId ?? ""),
+        propertyName: String(data.propertyName ?? ""),
+        active: Boolean(data.active),
+        disabled: Boolean(data.disabled),
+        disabledBy: String(data.disabledBy ?? ""),
+        reason: String(data.reason ?? ""),
+        expiresAt: String(data.expiresAt ?? ""),
+      };
+    })
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.id.localeCompare(b.id));
+
+  return { pricing, overrides };
+}
+
+export async function updateDemandOverride(payload) {
+  return setDemandScopeOverride(payload);
+}
+
 export async function getCitiesWithOwners() {
   const [citiesSnap, propsSnap, ownersSnap] = await Promise.all([
     getDocs(collection(db, COLLECTIONS.cities)),
@@ -255,6 +354,7 @@ export async function searchUserByPhone(phone) {
     name: String(data.name ?? ""),
     phoneNumber: String(data.phoneNumber ?? ""),
     role: String(data.role ?? ""),
+    ownerRevenueSharePercent: Number(data.ownerRevenueSharePercent ?? 10),
     email: String(data.email ?? ""),
     aadhaarRefId: String(data.aadhaarRefId ?? ""),
     aadhaarLast4: String(data.aadhaarLast4 ?? ""),
@@ -262,8 +362,12 @@ export async function searchUserByPhone(phone) {
   };
 }
 
-export async function updateManagedUserRole(userId, role) {
-  return setUserRole({ targetUid: userId, role });
+export async function updateManagedUserRole(userId, role, ownerRevenueSharePercent) {
+  const payload = { targetUid: userId, role };
+  if (Object.prototype.hasOwnProperty.call({ ownerRevenueSharePercent }, "ownerRevenueSharePercent") && ownerRevenueSharePercent !== undefined && ownerRevenueSharePercent !== null && ownerRevenueSharePercent !== "") {
+    payload.ownerRevenueSharePercent = Number(ownerRevenueSharePercent);
+  }
+  return setUserRole(payload);
 }
 
 export async function revealAadhaarForInvestigation(payload) {
@@ -295,17 +399,24 @@ export async function getOwnerApplications() {
       propertyAddress: String(data.propertyAddress ?? ""),
       description: String(data.description ?? ""),
       status: String(data.status ?? "pending"),
+      agreedOwnerRevenueSharePercent: Number(data.agreedOwnerRevenueSharePercent ?? 10),
     };
   });
 }
 
-export async function approveOwnerApplication(applicationId, userId) {
-  await setUserRole({ targetUid: userId, role: "owner" });
+export async function approveOwnerApplication(applicationId, userId, ownerRevenueSharePercent = 10) {
+  const agreedPercent = Math.max(0, Math.min(100, Number(ownerRevenueSharePercent) || 10));
+  await setUserRole({ targetUid: userId, role: "owner", ownerRevenueSharePercent: agreedPercent });
   await updateDoc(doc(db, COLLECTIONS.ownerApplications, applicationId), {
     status: "approved",
+    agreedOwnerRevenueSharePercent: agreedPercent,
+    agreementUpdatedAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
-  await writeAuditLog("owner_application_approved", "owner_application", applicationId, { userId });
+  await writeAuditLog("owner_application_approved", "owner_application", applicationId, {
+    userId,
+    ownerRevenueSharePercent: agreedPercent,
+  });
 }
 
 export async function rejectOwnerApplication(applicationId) {

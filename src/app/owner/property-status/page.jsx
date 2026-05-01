@@ -3,11 +3,14 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import {
+    allowDemandPricingForProperty,
     disableBedBlock,
+    getOwnerDemandStatuses,
     getOwnerBedBlocks,
     getOwnerBeds,
     getOwnerProperties,
     getOwnerRooms,
+    stopDemandPricingForProperty,
     toggleBedActive,
     togglePropertyActive,
     toggleRoomActive,
@@ -21,6 +24,7 @@ export default function OwnerPropertyStatusPage() {
     const [rooms, setRooms] = useState([]);
     const [beds, setBeds] = useState([]);
     const [bedBlocks, setBedBlocks] = useState([]);
+    const [demandStatuses, setDemandStatuses] = useState([]);
     const [roomCapacityDrafts, setRoomCapacityDrafts] = useState({});
     const [bedPriceDrafts, setBedPriceDrafts] = useState({});
     const [editingBedId, setEditingBedId] = useState(null);
@@ -34,16 +38,18 @@ export default function OwnerPropertyStatusPage() {
         setLoading(true);
         setError(null);
         try {
-            const [propertyItems, roomItems, bedItems, blockItems] = await Promise.all([
+            const [propertyItems, roomItems, bedItems, blockItems, demandItems] = await Promise.all([
                 getOwnerProperties(user.uid),
                 getOwnerRooms(user.uid),
                 getOwnerBeds(user.uid),
                 getOwnerBedBlocks(user.uid),
+                getOwnerDemandStatuses(user.uid),
             ]);
             setProperties(propertyItems);
             setRooms(roomItems);
             setBeds(bedItems);
             setBedBlocks(blockItems);
+            setDemandStatuses(demandItems);
             setRoomCapacityDrafts(Object.fromEntries(roomItems.map((room) => [room.id, String(room.totalBeds)])));
             setBedPriceDrafts(Object.fromEntries(bedItems.map((bed) => [bed.id, {
                 hourlyPrice: String(bed.hourlyPrice),
@@ -174,6 +180,49 @@ export default function OwnerPropertyStatusPage() {
         }
     }
 
+    async function handleStopDemandPricing(propertyId) {
+        if (!window.confirm("Stop demand pricing for this property until tomorrow 06:00?")) return;
+        setSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const result = await stopDemandPricingForProperty(propertyId);
+            setNotice(`Demand pricing stopped until ${formatDateTime(result?.expiresAt)}.`);
+            await loadData();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Could not stop demand pricing.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    async function handleAllowDemandPricing(propertyId) {
+        setSaving(true);
+        setError(null);
+        setNotice(null);
+        try {
+            await allowDemandPricingForProperty(propertyId);
+            setNotice("Demand pricing is allowed again for this property.");
+            await loadData();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Could not allow demand pricing.");
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    function formatDateTime(value) {
+        if (!value) return "-";
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return "-";
+        return date.toLocaleString("en-IN", {
+            day: "2-digit",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit",
+        });
+    }
+
     if (!user) {
         return (
             <main className="mx-auto min-h-screen max-w-4xl px-6 py-16">
@@ -295,6 +344,63 @@ export default function OwnerPropertyStatusPage() {
                             </tbody>
                         </table>
                         {beds.length === 0 ? <p className="mt-3 text-sm text-slate-500">No beds yet.</p> : null}
+                    </div>
+                )}
+            </section>
+
+            <section className="glass-card animate-stagger mt-6 rounded-2xl p-6">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <h2 className="text-lg font-semibold">Demand Pricing Status</h2>
+                        <p className="mt-1 text-sm text-slate-500">View active demand pricing and stop it for your own property when needed.</p>
+                    </div>
+                    <button type="button" onClick={() => void loadData()} disabled={loading || saving} className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-60">
+                        Refresh
+                    </button>
+                </div>
+                {loading ? <p className="mt-3 text-sm text-slate-500">Loading...</p> : demandStatuses.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">No demand pricing records yet.</p>
+                ) : (
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                        {demandStatuses.map((item) => (
+                            <article key={item.propertyId} className="rounded-xl border border-slate-200 bg-white p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <p className="font-semibold text-slate-900">{item.propertyName}</p>
+                                        <p className="text-xs text-slate-500">{item.cityName || "Unknown city"}</p>
+                                    </div>
+                                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${item.active ? "bg-rose-100 text-rose-700" : item.stoppedByOwner ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-600"}`}>
+                                        {item.active ? "On Demand" : item.stoppedByOwner ? "Stopped" : "Inactive"}
+                                    </span>
+                                </div>
+                                <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                                    <div className="rounded-lg bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase text-slate-500">Occupancy</p>
+                                        <p className="mt-1 text-lg font-bold text-slate-900">{Math.round(item.occupancyPercent)}%</p>
+                                    </div>
+                                    <div className="rounded-lg bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase text-slate-500">Increase</p>
+                                        <p className="mt-1 text-lg font-bold text-slate-900">{item.multiplierPercent}%</p>
+                                    </div>
+                                    <div className="rounded-lg bg-slate-50 p-3">
+                                        <p className="text-xs font-semibold uppercase text-slate-500">Source</p>
+                                        <p className="mt-1 text-sm font-bold text-slate-900">{item.inheritedFromCity ? "City" : "Property"}</p>
+                                    </div>
+                                </div>
+                                <p className="mt-3 text-sm text-slate-600">{item.reason}</p>
+                                {item.stoppedUntil ? (
+                                    <p className="mt-2 text-xs font-semibold text-amber-700">Stopped until {formatDateTime(item.stoppedUntil)}</p>
+                                ) : null}
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                    <button type="button" onClick={() => void handleStopDemandPricing(item.propertyId)} disabled={saving || item.stoppedByOwner} className="rounded-full border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-60">
+                                        Stop Demand Pricing
+                                    </button>
+                                    <button type="button" onClick={() => void handleAllowDemandPricing(item.propertyId)} disabled={saving || !item.stoppedByOwner} className="rounded-full border border-emerald-300 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60">
+                                        Allow Again
+                                    </button>
+                                </div>
+                            </article>
+                        ))}
                     </div>
                 )}
             </section>

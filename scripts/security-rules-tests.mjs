@@ -89,10 +89,32 @@ async function main() {
         remainingPaid: 12,
         paymentStatus: "pending_settlement",
       });
+
+      await setDoc(doc(db, "demand_watchlist", "property_propA"), {
+        scope: "property",
+        propertyId: "propA",
+        occupancyPercent: 70,
+        status: "watching",
+      });
+
+      await setDoc(doc(db, "demand_pricing", "property_propA"), {
+        scope: "property",
+        active: true,
+        propertyId: "propA",
+        multiplierPercent: 20,
+      });
+
+      await setDoc(doc(db, "demand_overrides", "property_propA"), {
+        scope: "property",
+        propertyId: "propA",
+        disabledBy: "owner",
+        disabledByUserId: "ownerA",
+      });
     });
 
     const consumerA = testEnv.authenticatedContext("consumerA").firestore();
     const ownerA = testEnv.authenticatedContext("ownerA").firestore();
+    const superA = testEnv.authenticatedContext("superA").firestore();
 
     const tests = [
       {
@@ -134,6 +156,41 @@ async function main() {
         name: "signed-in user can read booking_availability",
         run: async () => {
           await assertSucceeds(getDoc(doc(consumerA, "booking_availability", "bookingA")));
+        },
+      },
+      {
+        name: "consumer cannot read demand watchlist",
+        run: async () => {
+          await assertFails(getDoc(doc(consumerA, "demand_watchlist", "property_propA")));
+        },
+      },
+      {
+        name: "superadmin can read demand watchlist",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(superA, "demand_watchlist", "property_propA")));
+        },
+      },
+      {
+        name: "signed-in user can read demand pricing summary",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(consumerA, "demand_pricing", "property_propA")));
+        },
+      },
+      {
+        name: "owner can read own property demand override",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(ownerA, "demand_overrides", "property_propA")));
+        },
+      },
+      {
+        name: "owner cannot write own property demand override directly",
+        run: async () => {
+          await assertFails(
+            updateDoc(doc(ownerA, "demand_overrides", "property_propA"), {
+              disabledBy: "owner",
+              reason: "manual",
+            }),
+          );
         },
       },
     ];

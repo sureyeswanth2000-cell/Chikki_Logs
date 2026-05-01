@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ProtectedRoute } from "@/components/auth/protected-route";
+import { DemandPricingPanel } from "@/components/admin/demand-pricing-panel";
 import { useAuth } from "@/context/auth-context";
 import {
   addCity,
@@ -38,6 +39,7 @@ export default function OperatorPage() {
   const [searchPhone, setSearchPhone] = useState("");
   const [searchResult, setSearchResult] = useState(null);
   const [selectedRole, setSelectedRole] = useState("consumer");
+  const [ownerRevenueSharePercent, setOwnerRevenueSharePercent] = useState(10);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchNotice, setSearchNotice] = useState(null);
   const [searchError, setSearchError] = useState(null);
@@ -148,6 +150,7 @@ export default function OperatorPage() {
       }
       setSearchResult(found);
       setSelectedRole(found.role === "owner" ? "owner" : "consumer");
+      setOwnerRevenueSharePercent(Number(found.ownerRevenueSharePercent ?? 10));
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Search failed.");
     } finally {
@@ -161,8 +164,16 @@ export default function OperatorPage() {
     setSearchNotice(null);
 
     try {
-      await updateManagedUserRole(searchResult.id, selectedRole);
-      setSearchResult((prev) => (prev ? { ...prev, role: selectedRole } : prev));
+      await updateManagedUserRole(
+        searchResult.id,
+        selectedRole,
+        selectedRole === "owner" ? ownerRevenueSharePercent : undefined
+      );
+      setSearchResult((prev) => (prev ? {
+        ...prev,
+        role: selectedRole,
+        ownerRevenueSharePercent: selectedRole === "owner" ? ownerRevenueSharePercent : prev.ownerRevenueSharePercent,
+      } : prev));
       setSearchNotice(`Role updated to ${selectedRole}.`);
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Role update failed.");
@@ -172,9 +183,21 @@ export default function OperatorPage() {
   async function handleApproveApplication(application) {
     setAppsNotice(null);
     try {
-      await approveOwnerApplication(application.id, application.userId);
+      const enteredPercent = window.prompt(
+        `Enter agreed revenue share % for ${application.businessName}`,
+        String(application.agreedOwnerRevenueSharePercent ?? 10)
+      );
+      if (enteredPercent === null) {
+        return;
+      }
+      const agreedPercent = Math.max(0, Math.min(100, Number(enteredPercent)));
+      if (Number.isNaN(agreedPercent)) {
+        setAppsNotice("Enter a valid revenue share percentage between 0 and 100.");
+        return;
+      }
+      await approveOwnerApplication(application.id, application.userId, agreedPercent);
       setApplications((prev) => prev.filter((item) => item.id !== application.id));
-      setAppsNotice(`${application.businessName} was approved and moved to owner.`);
+      setAppsNotice(`${application.businessName} was approved with ${agreedPercent}% owner revenue share.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Approval failed.");
     }
@@ -377,6 +400,21 @@ export default function OperatorPage() {
                   Save Role
                 </button>
               </div>
+                {selectedRole === "owner" ? (
+                  <div className="mt-3 max-w-xs">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Owner Revenue Share %
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={ownerRevenueSharePercent}
+                      onChange={(event) => setOwnerRevenueSharePercent(Number(event.target.value || 0))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                    />
+                  </div>
+                ) : null}
             </div>
           ) : null}
         </section>
@@ -425,6 +463,10 @@ export default function OperatorPage() {
             </form>
           )}
         </section>
+
+        <div className="mt-8">
+          <DemandPricingPanel />
+        </div>
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
           <div className="flex items-center justify-between gap-3">
@@ -658,6 +700,7 @@ export default function OperatorPage() {
                       <p className="text-sm text-slate-600">Phone: {application.phone}</p>
                       <p className="text-sm text-slate-600">City: {application.cityName}</p>
                       <p className="text-sm text-slate-600">Address: {application.propertyAddress}</p>
+                      <p className="text-sm text-slate-600">Proposed Revenue Share: {application.agreedOwnerRevenueSharePercent ?? 10}%</p>
                       {application.description ? (
                         <p className="mt-1 text-sm italic text-slate-500">&quot;{application.description}&quot;</p>
                       ) : null}

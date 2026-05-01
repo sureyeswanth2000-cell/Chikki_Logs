@@ -1,5 +1,65 @@
 # Work Log
 
+## 2026-05-01
+
+### Completed
+- Expanded automatic peak-demand pricing into a concrete implementation checklist in `docs/TODO.md`.
+- Added shared demand-pricing rule helpers in `src/lib/demand-pricing.js`:
+  - property thresholds: 70-89% occupancy adds 20%, 90-100% adds 50%
+  - city thresholds: 80-89% occupancy adds 30%, 90-100% can add up to 100%
+  - final multiplier uses the higher applicable city/property increase, capped by the global max
+  - warning threshold starts at 60% occupancy
+  - owner stop-demand override expires the next day at 06:00 by default
+  - price helper can apply the selected multiplier to a base amount
+- Added collection names for future demand watchlist, pricing summary, and override documents.
+- Added Firestore rules for demand pricing collections:
+  - `demand_watchlist` is readable only by operator/superadmin
+  - `demand_pricing/{scopeId}` is readable by signed-in users for future consumer labels
+  - `demand_overrides/{scopeId}` is readable by operator/superadmin and the matching property owner
+  - all demand writes are backend-only
+- Added the 15-minute `refreshDemandWatchlist` Firebase scheduled Function:
+  - scans active properties and active beds
+  - excludes currently blocked beds from bookable capacity
+  - counts confirmed/checked-in booking availability against active bookable beds
+  - writes city/property watchlist records only at or above the 60% warning threshold
+  - marks old watchlist records `below_threshold` when demand drops
+  - writes a system audit log for each refresh
+- Added the 15-minute `refreshDemandPricing` Firebase scheduled Function:
+  - reads only `demand_watchlist` records with `status == "watching"`
+  - applies default city/property demand thresholds and global cap
+  - writes `demand_pricing/{scopeId}` summaries for city/property scopes
+  - uses the higher applicable property/city multiplier for property summaries
+  - respects platform emergency disable and active owner/operator overrides
+  - writes inactive summaries when demand drops below threshold
+  - writes a system audit log for each pricing refresh
+- Added secure demand-pricing callable controls:
+  - `updateDemandPricingSettings` for operator/superadmin threshold, cap, enable, and emergency-disable changes
+  - `setDemandScopeOverride` for operator/superadmin city/property demand override control
+  - `stopOwnerDemandPricing` for owners to disable demand pricing on their own property until next day 06:00 IST
+  - `allowOwnerDemandPricing` for owners to allow demand pricing again
+  - client wrappers in `src/lib/cloud/security.js`
+  - audit logs for settings changes, internal override changes, owner stop, and owner allow
+- Added shared internal `DemandPricingPanel` UI for operator and superadmin:
+  - enable/disable demand pricing
+  - emergency disable
+  - global max cap
+  - property and city threshold editing
+  - manual city/property override by scope ID
+  - current demand pricing summary table
+- Added owner demand status UI on `/owner/property-status`:
+  - shows property/city demand source, occupancy, increase %, status, and reason
+  - lets owners stop demand pricing for their own property until next day 06:00 IST
+  - lets owners allow demand pricing again
+  - reads property and city demand summaries so city-level demand is visible to owners
+- Added consumer demand visibility:
+  - listing cards read city/property demand summaries and show Demand Rising above 60% occupancy
+  - listings and exact booking bed selection show a clean High Demand label when active demand pricing applies
+  - displayed listing and bed prices include the active demand adjustment without exposing the internal multiplier
+- Added TODO to install Java / fix PATH so Firebase Firestore emulator rules tests can run locally.
+
+### Pending
+- Booking price locking and final all-inclusive owner revenue-share pricing are still open.
+
 ## 2026-04-29
 
 ### Completed

@@ -1,6 +1,7 @@
 import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where, } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
+import { allowOwnerDemandPricing, stopOwnerDemandPricing } from "@/lib/cloud/security";
 
 function toMillisFromDateTime(value) {
     if (!value)
@@ -264,6 +265,105 @@ export async function toggleBedActive(bedId, active) {
         active,
         updatedAt: serverTimestamp(),
     });
+}
+
+function demandDocId(scope, id) {
+    return `${scope}_${String(id ?? "").trim()}`;
+}
+
+function readDemandSummary(snapshot) {
+    if (!snapshot.exists()) {
+        return null;
+    }
+    const data = snapshot.data();
+    return {
+        id: snapshot.id,
+        active: Boolean(data.active),
+        scope: String(data.scope ?? ""),
+        scopeId: String(data.scopeId ?? ""),
+        status: String(data.status ?? ""),
+        occupancyPercent: Number(data.occupancyPercent ?? 0),
+        multiplierPercent: Number(data.multiplierPercent ?? 0),
+        warningActive: Boolean(data.warningActive),
+        stoppedByOwner: Boolean(data.stoppedByOwner),
+        overrideActive: Boolean(data.overrideActive),
+        reason: String(data.reason ?? ""),
+        calculatedAt: String(data.calculatedAt ?? ""),
+    };
+}
+
+function readDemandOverride(snapshot) {
+    if (!snapshot.exists()) {
+        return null;
+    }
+    const data = snapshot.data();
+    return {
+        id: snapshot.id,
+        active: Boolean(data.active),
+        disabled: Boolean(data.disabled),
+        disabledBy: String(data.disabledBy ?? ""),
+        reason: String(data.reason ?? ""),
+        expiresAt: String(data.expiresAt ?? ""),
+    };
+}
+
+export async function getOwnerDemandStatuses(ownerId) {
+    if (!ownerId) {
+        return [];
+    }
+    const properties = await getOwnerProperties(ownerId);
+    if (properties.length === 0) {
+        return [];
+    }
+
+    const statuses = await Promise.all(properties.map(async (property) => {
+        const propertyPricingRef = doc(db, COLLECTIONS.demandPricing, demandDocId("property", property.id));
+        const cityPricingRef = property.cityId
+            ? doc(db, COLLECTIONS.demandPricing, demandDocId("city", property.cityId))
+            : null;
+        const overrideRef = doc(db, COLLECTIONS.demandOverrides, demandDocId("property", property.id));
+
+        const [propertyPricingSnap, cityPricingSnap, overrideSnap] = await Promise.all([
+            getDoc(propertyPricingRef),
+            cityPricingRef ? getDoc(cityPricingRef) : Promise.resolve(null),
+            getDoc(overrideRef),
+        ]);
+
+        const propertyPricing = readDemandSummary(propertyPricingSnap);
+        const cityPricing = cityPricingSnap ? readDemandSummary(cityPricingSnap) : null;
+        const override = readDemandOverride(overrideSnap);
+        const effectivePricing = propertyPricing?.active ? propertyPricing : cityPricing;
+
+        return {
+            propertyId: property.id,
+            propertyName: property.name,
+            cityId: property.cityId,
+            cityName: property.cityName,
+            propertyPricing,
+            cityPricing,
+            override,
+            active: Boolean(effectivePricing?.active) && !Boolean(override?.active && override?.disabled),
+            inheritedFromCity: !propertyPricing?.active && Boolean(cityPricing?.active),
+            occupancyPercent: Number(effectivePricing?.occupancyPercent ?? propertyPricing?.occupancyPercent ?? cityPricing?.occupancyPercent ?? 0),
+            multiplierPercent: Number(effectivePricing?.multiplierPercent ?? 0),
+            warningActive: Boolean(effectivePricing?.warningActive ?? propertyPricing?.warningActive ?? cityPricing?.warningActive),
+            reason: override?.active && override?.disabled
+                ? `Stopped: ${override.reason || "owner override"}`
+                : String(effectivePricing?.reason ?? propertyPricing?.reason ?? cityPricing?.reason ?? "No active demand pricing"),
+            stoppedUntil: String(override?.expiresAt ?? ""),
+            stoppedByOwner: Boolean(override?.active && override?.disabled && override.disabledBy === "owner"),
+        };
+    }));
+
+    return statuses.sort((a, b) => a.propertyName.localeCompare(b.propertyName));
+}
+
+export async function stopDemandPricingForProperty(propertyId) {
+    return stopOwnerDemandPricing({ propertyId, reason: "Owner stopped demand pricing from property status page" });
+}
+
+export async function allowDemandPricingForProperty(propertyId) {
+    return allowOwnerDemandPricing({ propertyId });
 }
 export async function updateBedPrices(ownerId, bedId, payload) {
     const hourlyPrice = Number(payload.hourlyPrice);

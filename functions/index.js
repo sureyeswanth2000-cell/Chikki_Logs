@@ -96,6 +96,22 @@ const MAX_CHECKIN_GRACE_MINUTES = 120;
 const SCARCITY_MIN_BEDS = 1;
 const SCARCITY_MAX_BEDS = 5;
 const AADHAAR_VAULT_COLLECTION = "aadhaar_identity_vault";
+const DEMAND_WATCHLIST_COLLECTION = "demand_watchlist";
+const DEMAND_PRICING_COLLECTION = "demand_pricing";
+const DEMAND_OVERRIDES_COLLECTION = "demand_overrides";
+const DEMAND_WARNING_THRESHOLD_PERCENT = 60;
+const DEMAND_WATCHLIST_REFRESH_MINUTES = 15;
+const DEFAULT_DEMAND_GLOBAL_MAX_CAP_PERCENT = 100;
+const DEFAULT_DEMAND_PROPERTY_THRESHOLDS = [
+  { minOccupancyPercent: 90, multiplierPercent: 50 },
+  { minOccupancyPercent: 70, multiplierPercent: 20 },
+];
+const DEFAULT_DEMAND_CITY_THRESHOLDS = [
+  { minOccupancyPercent: 90, multiplierPercent: 100 },
+  { minOccupancyPercent: 80, multiplierPercent: 30 },
+];
+const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = 10;
+const DEFAULT_GATEWAY_FEE_PERCENT = 2;
 
 function randomInt(min, max) {
   const safeMin = Math.ceil(Number(min));
@@ -315,10 +331,47 @@ function computeBasePrice(duration, bedType, ownerPrices = {}) {
   return baseByDuration[duration] + acExtra;
 }
 
-function finalTotalFromBase(basePrice) {
-  const commission = Math.round(basePrice * 0.1);
-  const gateway = Math.round(basePrice * 0.02);
-  return basePrice + commission + gateway;
+function clampPercent(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function resolveOwnerRevenueSharePercent(value) {
+  return clampPercent(value, DEFAULT_OWNER_REVENUE_SHARE_PERCENT);
+}
+
+function resolveGatewayFeePercent(value) {
+  return clampPercent(value, DEFAULT_GATEWAY_FEE_PERCENT);
+}
+
+function pricingConfigForOwner(ownerData = {}) {
+  return {
+    ownerRevenueSharePercent: resolveOwnerRevenueSharePercent(ownerData.ownerRevenueSharePercent),
+    gatewayFeePercent: resolveGatewayFeePercent(ownerData.gatewayFeePercent),
+  };
+}
+
+function finalTotalFromBase(basePrice, pricingConfig = {}) {
+  const ownerRevenueSharePercent = resolveOwnerRevenueSharePercent(pricingConfig.ownerRevenueSharePercent);
+  const gatewayFeePercent = resolveGatewayFeePercent(pricingConfig.gatewayFeePercent);
+  const platformRevenueAmount = Math.round(basePrice * (ownerRevenueSharePercent / 100));
+  const gatewayAmount = Math.round(basePrice * (gatewayFeePercent / 100));
+  return {
+    ownerRevenueSharePercent,
+    gatewayFeePercent,
+    platformRevenueAmount,
+    gatewayAmount,
+    totalAmount: basePrice + platformRevenueAmount + gatewayAmount,
+  };
+}
+
+function applyDemandMultiplier(baseAmount, multiplierPercent = 0) {
+  const amount = Math.max(0, Number(baseAmount) || 0);
+  const multiplier = Math.max(0, Number(multiplierPercent) || 0);
+  return Math.round(amount * (1 + (multiplier / 100)));
 }
 
 function normalizedBedTypeRequirement(value) {
@@ -337,6 +390,222 @@ function isBlockActiveForTime(block, requestedStartMs, requestedEndMs) {
   const blockEndValue = toMillisOrNull(block.blockEnd);
   const blockEnd = block.isFullBlock ? Number.POSITIVE_INFINITY : blockEndValue ?? Number.POSITIVE_INFINITY;
   return hasOverlap(requestedStartMs, requestedEndMs, blockStart, blockEnd);
+}
+
+function isBlockActiveNow(block, nowMs) {
+  return isBlockActiveForTime(block, nowMs, nowMs + 1);
+}
+
+function isBookingAvailabilityActiveNow(booking, nowMs) {
+  const status = String(booking.bookingStatus ?? "").toLowerCase();
+  if (status !== "confirmed" && status !== "checked_in") {
+    return false;
+  }
+  const checkOutMs = toMillisOrNull(booking.checkOutAt);
+  return checkOutMs === null || checkOutMs > nowMs;
+}
+
+function demandScopeDocId(scope, id) {
+  return `${scope}_${String(id ?? "").trim()}`;
+}
+
+function occupancyPercent(occupiedBeds, activeBookableBeds) {
+  if (activeBookableBeds <= 0) {
+    return 0;
+  }
+  return Number(Math.min(100, (occupiedBeds / activeBookableBeds) * 100).toFixed(2));
+}
+
+function safePercent(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return Math.max(0, fallback);
+  }
+  return Math.max(0, parsed);
+}
+
+function normalizeDemandThresholds(value, fallback) {
+  const source = Array.isArray(value) && value.length > 0 ? value : fallback;
+  return source
+    .map((item) => ({
+      minOccupancyPercent: safePercent(item?.minOccupancyPercent ?? item?.min),
+      multiplierPercent: safePercent(item?.multiplierPercent ?? item?.increasePercent),
+    }))
+    .filter((item) => item.minOccupancyPercent > 0)
+    .sort((a, b) => b.minOccupancyPercent - a.minOccupancyPercent);
+}
+
+async function readDemandPricingSettings() {
+  const ref = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
+  const snap = await ref.get();
+  const data = snap.exists ? (snap.data() || {}) : {};
+  return {
+    enabled: data.demandPricingEnabled !== false,
+    emergencyDisabled: Boolean(data.demandPricingEmergencyDisabled),
+    globalMaxCapPercent: safePercent(
+      data.demandPricingGlobalMaxCapPercent,
+      DEFAULT_DEMAND_GLOBAL_MAX_CAP_PERCENT
+    ),
+    propertyThresholds: normalizeDemandThresholds(
+      data.demandPricingPropertyThresholds,
+      DEFAULT_DEMAND_PROPERTY_THRESHOLDS
+    ),
+    cityThresholds: normalizeDemandThresholds(
+      data.demandPricingCityThresholds,
+      DEFAULT_DEMAND_CITY_THRESHOLDS
+    ),
+  };
+}
+
+function demandThresholdsFor(scope, settings) {
+  return scope === "city" ? settings.cityThresholds : settings.propertyThresholds;
+}
+
+function getDemandMultiplierPercent(scope, occupancy, settings) {
+  if (!settings.enabled || settings.emergencyDisabled) {
+    return 0;
+  }
+  const percent = safePercent(occupancy);
+  const matched = demandThresholdsFor(scope, settings)
+    .find((threshold) => percent >= threshold.minOccupancyPercent);
+  if (!matched) {
+    return 0;
+  }
+  return Math.min(matched.multiplierPercent, settings.globalMaxCapPercent);
+}
+
+function normalizeDemandScope(value) {
+  const scope = String(value ?? "").trim().toLowerCase();
+  if (scope !== "city" && scope !== "property") {
+    throw new HttpsError("invalid-argument", "Demand scope must be city or property.");
+  }
+  return scope;
+}
+
+function clampDemandPercent(value, fieldName) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new HttpsError("invalid-argument", `${fieldName} must be a number.`);
+  }
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function normalizeDemandThresholdPayload(value, fieldName, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (!Array.isArray(value) || value.length === 0 || value.length > 5) {
+    throw new HttpsError("invalid-argument", `${fieldName} must include 1 to 5 threshold rows.`);
+  }
+  return value
+    .map((item) => ({
+      minOccupancyPercent: clampDemandPercent(item?.minOccupancyPercent ?? item?.min, `${fieldName} occupancy`),
+      multiplierPercent: clampDemandPercent(item?.multiplierPercent ?? item?.increasePercent, `${fieldName} increase`),
+    }))
+    .filter((item) => item.minOccupancyPercent > 0)
+    .sort((a, b) => b.minOccupancyPercent - a.minOccupancyPercent);
+}
+
+function nextOwnerDemandOverrideExpiry(nowMs = Date.now()) {
+  const istOffsetMs = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(nowMs + istOffsetMs);
+  const year = istNow.getUTCFullYear();
+  const month = istNow.getUTCMonth();
+  const date = istNow.getUTCDate();
+  // Next day 06:00 IST is 00:30 UTC on that next IST date.
+  return new Date(Date.UTC(year, month, date + 1, 0, 30, 0, 0));
+}
+
+async function getPropertyForDemandControl(propertyId) {
+  const propertySnap = await db.collection("properties").doc(propertyId).get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const property = propertySnap.data() || {};
+  return {
+    propertyId,
+    propertyName: String(property.name ?? "").trim(),
+    ownerId: String(property.ownerId ?? "").trim(),
+    cityId: String(property.cityId ?? "").trim(),
+    cityName: String(property.cityName ?? "").trim(),
+  };
+}
+
+async function getCityForDemandControl(cityId) {
+  const citySnap = await db.collection("cities").doc(cityId).get();
+  if (!citySnap.exists) {
+    throw new HttpsError("not-found", "City not found.");
+  }
+  const city = citySnap.data() || {};
+  return {
+    cityId,
+    cityName: String(city.name ?? "").trim(),
+  };
+}
+
+function isDemandOverrideActive(override, nowMs) {
+  if (!override || override.active === false) {
+    return false;
+  }
+  const disabledBy = String(override.disabledBy ?? override.manuallyDisabledBy ?? "").trim();
+  const explicitlyDisabled = override.disabled === true || disabledBy.length > 0;
+  if (!explicitlyDisabled) {
+    return false;
+  }
+  const expiresAtMs = typeof override.expiresAtMs === "number"
+    ? override.expiresAtMs
+    : timestampToMillis(override.expiresAt);
+  return expiresAtMs === null || expiresAtMs > nowMs;
+}
+
+function demandReason(scope, occupancy, multiplier) {
+  const label = scope === "city" ? "city" : "property";
+  const roundedOccupancy = Math.round(safePercent(occupancy));
+  const roundedMultiplier = Math.round(safePercent(multiplier));
+  if (roundedMultiplier <= 0) {
+    return `${label} occupancy is ${roundedOccupancy}%, so demand pricing is not active`;
+  }
+  return `${label} occupancy is ${roundedOccupancy}%, so demand pricing adds ${roundedMultiplier}%`;
+}
+
+function normalizeDemandSummaryData(data, fallbackScope = "") {
+  if (!data) {
+    return {
+      active: false,
+      warningActive: false,
+      multiplierPercent: 0,
+      occupancyPercent: 0,
+      source: fallbackScope,
+      reason: "",
+    };
+  }
+  const active = Boolean(data.active);
+  const warningActive = Boolean(data.warningActive);
+  const multiplierPercent = Math.max(0, Number(data.multiplierPercent ?? 0));
+  const occupancyPercent = Math.max(0, Number(data.occupancyPercent ?? 0));
+  return {
+    active,
+    warningActive: warningActive || occupancyPercent >= DEMAND_WARNING_THRESHOLD_PERCENT,
+    multiplierPercent: active ? multiplierPercent : 0,
+    occupancyPercent,
+    source: String(data.scope ?? fallbackScope),
+    reason: String(data.reason ?? ""),
+  };
+}
+
+function chooseEffectiveDemandSummary(propertySummary, citySummary) {
+  if (propertySummary.active) {
+    return propertySummary;
+  }
+  if (citySummary.active) {
+    return citySummary;
+  }
+  const warningSource = propertySummary.warningActive ? propertySummary : citySummary;
+  return {
+    ...warningSource,
+    active: false,
+    multiplierPercent: 0,
+  };
 }
 
 function bookingCodeFor(bookingId, createdAtMs = Date.now()) {
@@ -522,13 +791,19 @@ function enforceRateLimitWithSnapshot(transaction, ref, snap, limit, windowMs) {
   return { count: count + 1, limited: false };
 }
 
-function computeCheckoutTotals(hourlyPrice, bedType, elapsedHours, advancePaid) {
-  const baseRate = Number(hourlyPrice ?? 120) + (String(bedType ?? "").toUpperCase() === "AC" ? 50 : 0);
+function computeCheckoutTotals({
+  lockedHourlyRate,
+  lockedHourlyBaseRate,
+  lockedPlatformHourlyRate,
+  lockedGatewayHourlyRate,
+  elapsedHours,
+  advancePaid,
+}) {
   const safeHours = Math.max(1, elapsedHours);
-  const basePrice = baseRate * safeHours;
-  const commissionAmount = Math.round(basePrice * 0.1);
-  const gatewayAmount = Math.round(basePrice * 0.02);
-  const totalAmount = basePrice + commissionAmount + gatewayAmount;
+  const basePrice = Math.round(Number(lockedHourlyBaseRate ?? 120) * safeHours);
+  const commissionAmount = Math.round(Number(lockedPlatformHourlyRate ?? 12) * safeHours);
+  const gatewayAmount = Math.round(Number(lockedGatewayHourlyRate ?? 2) * safeHours);
+  const totalAmount = Math.round(Number(lockedHourlyRate ?? 134) * safeHours);
   const remainingPaid = Math.max(totalAmount - Number(advancePaid ?? 100), 0);
   return {
     basePrice,
@@ -746,6 +1021,10 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
   const callerUid = request.auth.uid;
   const targetUid = String(request.data?.targetUid ?? "").trim();
   const targetRole = String(request.data?.role ?? "").trim();
+  const hasOwnerRevenueSharePercent = Object.prototype.hasOwnProperty.call(request.data || {}, "ownerRevenueSharePercent");
+  const ownerRevenueSharePercent = hasOwnerRevenueSharePercent
+    ? resolveOwnerRevenueSharePercent(request.data?.ownerRevenueSharePercent)
+    : null;
 
   if (!targetUid) {
     throw new HttpsError("invalid-argument", "targetUid is required.");
@@ -776,7 +1055,8 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     throw new HttpsError("permission-denied", "Only operator or superadmin can assign roles.");
   }
 
-  if (currentTargetRole === targetRole) {
+  const shouldUpdateOwnerRevenueShare = targetRole === "owner" && ownerRevenueSharePercent !== null;
+  if (currentTargetRole === targetRole && !shouldUpdateOwnerRevenueShare) {
     return {
       ok: true,
       targetUid,
@@ -786,13 +1066,15 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     };
   }
 
-  await targetRef.set(
-    {
-      role: targetRole,
-      updatedAt: FieldValue.serverTimestamp(),
-    },
-    { merge: true }
-  );
+  const roleUpdate = {
+    role: targetRole,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+  if (shouldUpdateOwnerRevenueShare) {
+    roleUpdate.ownerRevenueSharePercent = ownerRevenueSharePercent;
+  }
+
+  await targetRef.set(roleUpdate, { merge: true });
 
   await db.collection("audit_logs").add({
     actorUserId: callerUid,
@@ -803,6 +1085,7 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     metadata: {
       previousRole: currentTargetRole,
       nextRole: targetRole,
+      ownerRevenueSharePercent,
       source: "internal_role_console",
     },
     createdAt: FieldValue.serverTimestamp(),
@@ -966,6 +1249,288 @@ exports.setCityScarcityMode = onCall({ cors: true }, async (request) => {
   };
 });
 
+exports.updateDemandPricingSettings = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can update demand pricing settings.");
+  }
+
+  const input = request.data || {};
+  const currentSettings = await readDemandPricingSettings();
+  const nextSettings = {
+    enabled: Object.prototype.hasOwnProperty.call(input, "enabled")
+      ? Boolean(input.enabled)
+      : currentSettings.enabled,
+    emergencyDisabled: Object.prototype.hasOwnProperty.call(input, "emergencyDisabled")
+      ? Boolean(input.emergencyDisabled)
+      : currentSettings.emergencyDisabled,
+    globalMaxCapPercent: Object.prototype.hasOwnProperty.call(input, "globalMaxCapPercent")
+      ? clampDemandPercent(input.globalMaxCapPercent, "global max cap")
+      : currentSettings.globalMaxCapPercent,
+    propertyThresholds: normalizeDemandThresholdPayload(
+      input.propertyThresholds,
+      "property thresholds",
+      currentSettings.propertyThresholds
+    ),
+    cityThresholds: normalizeDemandThresholdPayload(
+      input.cityThresholds,
+      "city thresholds",
+      currentSettings.cityThresholds
+    ),
+  };
+
+  const settingsRef = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
+  await settingsRef.set({
+    demandPricingEnabled: nextSettings.enabled,
+    demandPricingEmergencyDisabled: nextSettings.emergencyDisabled,
+    demandPricingGlobalMaxCapPercent: nextSettings.globalMaxCapPercent,
+    demandPricingPropertyThresholds: nextSettings.propertyThresholds,
+    demandPricingCityThresholds: nextSettings.cityThresholds,
+    demandPricingUpdatedBy: callerUid,
+    demandPricingUpdatedByRole: callerRole,
+    demandPricingUpdatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "demand_pricing_settings_updated",
+    entityType: "demand_pricing",
+    entityId: PLATFORM_SETTINGS_DOC_ID,
+    metadata: {
+      enabled: nextSettings.enabled,
+      emergencyDisabled: nextSettings.emergencyDisabled,
+      globalMaxCapPercent: nextSettings.globalMaxCapPercent,
+      propertyThresholds: nextSettings.propertyThresholds,
+      cityThresholds: nextSettings.cityThresholds,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    settings: nextSettings,
+  };
+});
+
+exports.setDemandScopeOverride = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can control demand overrides.");
+  }
+
+  const scope = normalizeDemandScope(request.data?.scope);
+  const scopeId = String(request.data?.scopeId ?? request.data?.cityId ?? request.data?.propertyId ?? "").trim();
+  const disabled = Boolean(request.data?.disabled);
+  const reason = normalizeText(request.data?.reason, 240);
+  if (!scopeId) {
+    throw new HttpsError("invalid-argument", "scopeId is required.");
+  }
+  if (disabled && !reason) {
+    throw new HttpsError("invalid-argument", "Reason is required when disabling demand pricing.");
+  }
+
+  const docId = demandScopeDocId(scope, scopeId);
+  const overrideRef = db.collection(DEMAND_OVERRIDES_COLLECTION).doc(docId);
+  const nowMs = Date.now();
+  let scopeData = {};
+  if (scope === "property") {
+    scopeData = await getPropertyForDemandControl(scopeId);
+  } else {
+    scopeData = await getCityForDemandControl(scopeId);
+  }
+
+  const updateData = {
+    scope,
+    scopeId,
+    cityId: scope === "city" ? scopeId : scopeData.cityId || null,
+    cityName: scopeData.cityName || "",
+    propertyId: scope === "property" ? scopeId : null,
+    propertyName: scopeData.propertyName || "",
+    ownerId: scopeData.ownerId || null,
+    active: disabled,
+    disabled,
+    disabledBy: disabled ? callerRole : null,
+    disabledByUserId: disabled ? callerUid : null,
+    manuallyDisabledBy: disabled ? callerRole : null,
+    reason: disabled ? reason : "",
+    canOperatorOverride: true,
+    disabledAtMs: disabled ? nowMs : null,
+    disabledAt: disabled ? new Date(nowMs).toISOString() : null,
+    expiresAtMs: null,
+    expiresAt: null,
+    clearedAtMs: disabled ? null : nowMs,
+    clearedAt: disabled ? null : new Date(nowMs).toISOString(),
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await overrideRef.set(updateData, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: disabled ? "demand_override_disabled" : "demand_override_enabled",
+    entityType: "demand_override",
+    entityId: docId,
+    metadata: {
+      scope,
+      scopeId,
+      reason: reason || null,
+      source: "internal_demand_control",
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    scope,
+    scopeId,
+    overrideId: docId,
+    disabled,
+  };
+});
+
+exports.stopOwnerDemandPricing = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "owner") {
+    throw new HttpsError("permission-denied", "Only owners can stop demand pricing for their property.");
+  }
+
+  const propertyId = String(request.data?.propertyId ?? "").trim();
+  const reason = normalizeText(request.data?.reason || "Owner stopped demand pricing", 240);
+  if (!propertyId) {
+    throw new HttpsError("invalid-argument", "propertyId is required.");
+  }
+  const property = await getPropertyForDemandControl(propertyId);
+  if (property.ownerId !== callerUid) {
+    throw new HttpsError("permission-denied", "You can stop demand pricing only for your own property.");
+  }
+
+  const nowMs = Date.now();
+  const expiresAt = nextOwnerDemandOverrideExpiry(nowMs);
+  const overrideId = demandScopeDocId("property", propertyId);
+  await db.collection(DEMAND_OVERRIDES_COLLECTION).doc(overrideId).set({
+    scope: "property",
+    scopeId: propertyId,
+    propertyId,
+    propertyName: property.propertyName,
+    cityId: property.cityId || null,
+    cityName: property.cityName || "",
+    ownerId: callerUid,
+    active: true,
+    disabled: true,
+    disabledBy: "owner",
+    disabledByUserId: callerUid,
+    manuallyDisabledBy: "owner",
+    reason,
+    canOperatorOverride: true,
+    disabledAtMs: nowMs,
+    disabledAt: new Date(nowMs).toISOString(),
+    expiresAtMs: expiresAt.getTime(),
+    expiresAt: expiresAt.toISOString(),
+    clearedAtMs: null,
+    clearedAt: null,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_demand_pricing_stopped",
+    entityType: "demand_override",
+    entityId: overrideId,
+    metadata: {
+      propertyId,
+      cityId: property.cityId || null,
+      reason,
+      expiresAt: expiresAt.toISOString(),
+      expiresAtMs: expiresAt.getTime(),
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    propertyId,
+    overrideId,
+    disabled: true,
+    expiresAt: expiresAt.toISOString(),
+    expiresAtMs: expiresAt.getTime(),
+  };
+});
+
+exports.allowOwnerDemandPricing = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "owner") {
+    throw new HttpsError("permission-denied", "Only owners can allow demand pricing for their property.");
+  }
+
+  const propertyId = String(request.data?.propertyId ?? "").trim();
+  if (!propertyId) {
+    throw new HttpsError("invalid-argument", "propertyId is required.");
+  }
+  const property = await getPropertyForDemandControl(propertyId);
+  if (property.ownerId !== callerUid) {
+    throw new HttpsError("permission-denied", "You can allow demand pricing only for your own property.");
+  }
+
+  const nowMs = Date.now();
+  const overrideId = demandScopeDocId("property", propertyId);
+  await db.collection(DEMAND_OVERRIDES_COLLECTION).doc(overrideId).set({
+    scope: "property",
+    scopeId: propertyId,
+    propertyId,
+    propertyName: property.propertyName,
+    cityId: property.cityId || null,
+    cityName: property.cityName || "",
+    ownerId: callerUid,
+    active: false,
+    disabled: false,
+    disabledBy: null,
+    disabledByUserId: null,
+    manuallyDisabledBy: null,
+    reason: "",
+    canOperatorOverride: true,
+    expiresAtMs: null,
+    expiresAt: null,
+    clearedAtMs: nowMs,
+    clearedAt: new Date(nowMs).toISOString(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_demand_pricing_allowed",
+    entityType: "demand_override",
+    entityId: overrideId,
+    metadata: {
+      propertyId,
+      cityId: property.cityId || null,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    propertyId,
+    overrideId,
+    disabled: false,
+  };
+});
+
 exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
   const userId = request.auth.uid;
@@ -985,6 +1550,30 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   if (!["hourly", "overnight", "overday"].includes(duration)) {
     throw new HttpsError("invalid-argument", "Invalid duration selected.");
   }
+
+  const propertyRef = db.collection("properties").doc(propertyId);
+  const propertySnap = await propertyRef.get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const propertyData = propertySnap.data() || {};
+  const ownerId = String(propertyData.ownerId ?? "").trim();
+  const cityId = String(propertyData.cityId ?? "").trim();
+
+  const ownerSnap = ownerId ? await db.collection("users").doc(ownerId).get() : null;
+  const ownerData = ownerSnap && ownerSnap.exists ? (ownerSnap.data() || {}) : {};
+  const pricingConfig = pricingConfigForOwner(ownerData);
+
+  const [propertyDemandSnap, cityDemandSnap] = await Promise.all([
+    db.collection(DEMAND_PRICING_COLLECTION).doc(demandScopeDocId("property", propertyId)).get(),
+    cityId
+      ? db.collection(DEMAND_PRICING_COLLECTION).doc(demandScopeDocId("city", cityId)).get()
+      : Promise.resolve(null),
+  ]);
+  const propertyDemandSummary = normalizeDemandSummaryData(propertyDemandSnap?.exists ? propertyDemandSnap.data() : null, "property");
+  const cityDemandSummary = normalizeDemandSummaryData(cityDemandSnap?.exists ? cityDemandSnap.data() : null, "city");
+  const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
+  const demandMultiplierPercent = Math.max(0, Number(demandSummary.multiplierPercent ?? 0));
 
   const checkInMillis = toRequiredMillis(checkInAt, "check-in time");
   if (checkInMillis < Date.now()) {
@@ -1090,22 +1679,43 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   const chosenBed = availableBeds
     .map((bed) => ({
       ...bed,
-      finalTotal: finalTotalFromBase(computeBasePrice(duration, bed.bedType, {
-        hourlyPrice: bed.hourlyPrice,
-        overnightPrice: bed.overnightPrice,
-        overdayPrice: bed.overdayPrice,
-      })),
+      finalTotal: applyDemandMultiplier(
+        finalTotalFromBase(
+          computeBasePrice(duration, bed.bedType, {
+            hourlyPrice: bed.hourlyPrice,
+            overnightPrice: bed.overnightPrice,
+            overdayPrice: bed.overdayPrice,
+          }),
+          pricingConfig
+        ).totalAmount,
+        demandMultiplierPercent
+      ),
     }))
     .sort((a, b) => (a.finalTotal !== b.finalTotal ? a.finalTotal - b.finalTotal : a.bedCode.localeCompare(b.bedCode)))[0];
 
-  const basePrice = computeBasePrice(duration, chosenBed.bedType, {
+  const durationBasePrice = computeBasePrice(duration, chosenBed.bedType, {
     hourlyPrice: chosenBed.hourlyPrice,
     overnightPrice: chosenBed.overnightPrice,
     overdayPrice: chosenBed.overdayPrice,
   });
-  const commissionAmount = Math.round(basePrice * 0.1);
-  const gatewayAmount = Math.round(basePrice * 0.02);
-  const totalAmount = finalTotalFromBase(basePrice);
+  const durationPricing = finalTotalFromBase(durationBasePrice, pricingConfig);
+  const durationRateLocked = applyDemandMultiplier(durationPricing.totalAmount, demandMultiplierPercent);
+
+  const hourlyBasePrice = computeBasePrice("hourly", chosenBed.bedType, {
+    hourlyPrice: chosenBed.hourlyPrice,
+    overnightPrice: chosenBed.overnightPrice,
+    overdayPrice: chosenBed.overdayPrice,
+  });
+  const hourlyPricing = finalTotalFromBase(hourlyBasePrice, pricingConfig);
+  const lockedHourlyRate = applyDemandMultiplier(hourlyPricing.totalAmount, demandMultiplierPercent);
+  const lockedHourlyBaseRate = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
+  const lockedPlatformHourlyRate = applyDemandMultiplier(hourlyPricing.platformRevenueAmount, demandMultiplierPercent);
+  const lockedGatewayHourlyRate = applyDemandMultiplier(hourlyPricing.gatewayAmount, demandMultiplierPercent);
+
+  const basePrice = durationBasePrice;
+  const commissionAmount = durationPricing.platformRevenueAmount;
+  const gatewayAmount = durationPricing.gatewayAmount;
+  const totalAmount = durationRateLocked;
   const advancePaid = 100;
   const remainingPaid = Math.max(totalAmount - advancePaid, 0);
   const bookingRef = db.collection("bookings").doc();
@@ -1173,6 +1783,19 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         totalAmount,
         advancePaid,
         remainingPaid,
+        ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
+        gatewayFeePercent: pricingConfig.gatewayFeePercent,
+        demandMultiplierPercent,
+        demandLabelSnapshot: demandSummary.active ? "high_demand" : "normal",
+        demandSource: demandSummary.source,
+        demandReason: demandSummary.reason,
+        demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
+        lockedDurationRate: durationRateLocked,
+        lockedHourlyRate,
+        lockedHourlyBaseRate,
+        lockedPlatformHourlyRate,
+        lockedGatewayHourlyRate,
+        priceLockedAt: FieldValue.serverTimestamp(),
         paymentStatus: "advance_paid_placeholder",
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
@@ -1189,6 +1812,12 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
           bedId: chosenBed.bedId,
           bedCode: chosenBed.bedCode,
           bedType: chosenBed.bedType,
+          ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
+          gatewayFeePercent: pricingConfig.gatewayFeePercent,
+          demandActiveAtBooking: Boolean(demandSummary.active),
+          demandWarningAtBooking: Boolean(demandSummary.warningActive),
+          demandMultiplierPercent,
+          demandSource: demandSummary.source,
           aadhaarRefAttached: Boolean(aadhaarRefId),
           attemptCount: rate.count,
         },
@@ -1315,12 +1944,6 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
 
   const elapsedHours = Math.max(1, Math.ceil((checkoutMs - checkInMs) / (1000 * 60 * 60)));
   const bedId = String(bookingData.bedId ?? "");
-  const bedSnap = await db.collection("beds").doc(bedId).get();
-  const bedData = bedSnap.exists ? bedSnap.data() : { hourlyPrice: 120, bedType: "NON_AC" };
-
-  if (!bedSnap.exists) {
-    console.warn(`[completeCheckout] Bed record ${bedId} missing for booking ${bookingId}`);
-  }
 
   const paymentSnapshot = await db.collection("payments").where("bookingId", "==", bookingId).limit(1).get();
   if (paymentSnapshot.empty) {
@@ -1333,12 +1956,36 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
   const paymentData = paymentDoc.data() || {};
   const advancePaid = Number(paymentData.advancePaid ?? 100);
 
-  const totals = computeCheckoutTotals(
-    Number(bedData?.hourlyPrice ?? 120),
-    String(bedData?.bedType ?? "NON_AC"),
-    elapsedHours,
-    advancePaid,
-  );
+  const hasLockedRateSnapshot = Number.isFinite(Number(paymentData.lockedHourlyRate));
+  let checkoutTotalsInput;
+
+  if (hasLockedRateSnapshot) {
+    checkoutTotalsInput = {
+      lockedHourlyRate: Number(paymentData.lockedHourlyRate),
+      lockedHourlyBaseRate: Number(paymentData.lockedHourlyBaseRate ?? 120),
+      lockedPlatformHourlyRate: Number(paymentData.lockedPlatformHourlyRate ?? 12),
+      lockedGatewayHourlyRate: Number(paymentData.lockedGatewayHourlyRate ?? 2),
+      elapsedHours,
+      advancePaid,
+    };
+  } else {
+    const bedSnap = await db.collection("beds").doc(bedId).get();
+    const bedData = bedSnap.exists ? bedSnap.data() : { hourlyPrice: 120, bedType: "NON_AC" };
+    const fallbackBaseRate = Number(bedData?.hourlyPrice ?? 120) + (String(bedData?.bedType ?? "NON_AC").toUpperCase() === "AC" ? 50 : 0);
+    const fallbackPlatformRate = Math.round(fallbackBaseRate * 0.1);
+    const fallbackGatewayRate = Math.round(fallbackBaseRate * 0.02);
+
+    checkoutTotalsInput = {
+      lockedHourlyRate: fallbackBaseRate + fallbackPlatformRate + fallbackGatewayRate,
+      lockedHourlyBaseRate: fallbackBaseRate,
+      lockedPlatformHourlyRate: fallbackPlatformRate,
+      lockedGatewayHourlyRate: fallbackGatewayRate,
+      elapsedHours,
+      advancePaid,
+    };
+  }
+
+  const totals = computeCheckoutTotals(checkoutTotalsInput);
 
   const checkoutIso = new Date(checkoutMs).toISOString();
   const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingId);
@@ -1630,6 +2277,463 @@ exports.refreshCityScarcityValues = onSchedule("every 15 minutes", async () => {
   });
 
   return { ok: true, refreshed };
+});
+
+exports.refreshDemandWatchlist = onSchedule("every 15 minutes", async () => {
+  const nowMs = Date.now();
+  const [
+    propertiesSnap,
+    bedsSnap,
+    blocksSnap,
+    availabilitySnap,
+    existingWatchlistSnap,
+  ] = await Promise.all([
+    db.collection("properties").where("status", "==", "active").get(),
+    db.collection("beds").where("active", "==", true).get(),
+    db.collection("bed_blocks").where("active", "==", true).get(),
+    db.collection("booking_availability").where("bookingStatus", "in", ["confirmed", "checked_in"]).get(),
+    db.collection(DEMAND_WATCHLIST_COLLECTION).get(),
+  ]);
+
+  const propertyMap = new Map();
+  propertiesSnap.docs.forEach((propertyDoc) => {
+    const data = propertyDoc.data() || {};
+    propertyMap.set(propertyDoc.id, {
+      propertyId: propertyDoc.id,
+      cityId: String(data.cityId ?? "").trim(),
+      cityName: String(data.cityName ?? "").trim(),
+      propertyName: String(data.name ?? "").trim(),
+      ownerId: String(data.ownerId ?? "").trim(),
+    });
+  });
+
+  const activeBedsByProperty = new Map();
+  bedsSnap.docs.forEach((bedDoc) => {
+    const bed = bedDoc.data() || {};
+    const propertyId = String(bed.propertyId ?? "").trim();
+    if (!propertyId || !propertyMap.has(propertyId)) {
+      return;
+    }
+    if (!activeBedsByProperty.has(propertyId)) {
+      activeBedsByProperty.set(propertyId, []);
+    }
+    activeBedsByProperty.get(propertyId).push({
+      bedId: bedDoc.id,
+      propertyId,
+    });
+  });
+
+  const blockedBedIds = new Set(blocksSnap.docs
+    .map((blockDoc) => blockDoc.data() || {})
+    .filter((block) => isBlockActiveNow(block, nowMs))
+    .map((block) => String(block.bedId ?? "").trim())
+    .filter(Boolean));
+
+  const activeBookedBedIds = new Set(availabilitySnap.docs
+    .map((bookingDoc) => bookingDoc.data() || {})
+    .filter((booking) => isBookingAvailabilityActiveNow(booking, nowMs))
+    .map((booking) => String(booking.bedId ?? "").trim())
+    .filter(Boolean));
+
+  const propertyStats = [];
+  const cityStatsMap = new Map();
+
+  propertyMap.forEach((property) => {
+    const beds = activeBedsByProperty.get(property.propertyId) || [];
+    const activeBookableBedIds = beds
+      .map((bed) => bed.bedId)
+      .filter((bedId) => !blockedBedIds.has(bedId));
+    const activeBookableBeds = activeBookableBedIds.length;
+    const occupiedBeds = activeBookableBedIds
+      .filter((bedId) => activeBookedBedIds.has(bedId))
+      .length;
+    const percent = occupancyPercent(occupiedBeds, activeBookableBeds);
+
+    const item = {
+      ...property,
+      scope: "property",
+      activeBookableBeds,
+      occupiedBeds,
+      occupancyPercent: percent,
+    };
+    propertyStats.push(item);
+
+    if (property.cityId) {
+      const currentCity = cityStatsMap.get(property.cityId) || {
+        scope: "city",
+        cityId: property.cityId,
+        cityName: property.cityName,
+        activeBookableBeds: 0,
+        occupiedBeds: 0,
+        propertyCount: 0,
+      };
+      currentCity.activeBookableBeds += activeBookableBeds;
+      currentCity.occupiedBeds += occupiedBeds;
+      currentCity.propertyCount += 1;
+      cityStatsMap.set(property.cityId, currentCity);
+    }
+  });
+
+  const cityStats = [...cityStatsMap.values()].map((city) => ({
+    ...city,
+    occupancyPercent: occupancyPercent(city.occupiedBeds, city.activeBookableBeds),
+  }));
+  const watchItems = [...propertyStats, ...cityStats]
+    .filter((item) => item.occupancyPercent >= DEMAND_WARNING_THRESHOLD_PERCENT);
+
+  const activeWatchIds = new Set(watchItems.map((item) => (
+    item.scope === "city"
+      ? demandScopeDocId("city", item.cityId)
+      : demandScopeDocId("property", item.propertyId)
+  )));
+
+  let batch = db.batch();
+  let opCount = 0;
+  let watching = 0;
+  let belowThreshold = 0;
+
+  async function flushBatch() {
+    if (opCount === 0) {
+      return;
+    }
+    await batch.commit();
+    batch = db.batch();
+    opCount = 0;
+  }
+
+  for (const item of watchItems) {
+    const scopeId = item.scope === "city" ? item.cityId : item.propertyId;
+    const docId = demandScopeDocId(item.scope, scopeId);
+    const ref = db.collection(DEMAND_WATCHLIST_COLLECTION).doc(docId);
+    batch.set(ref, {
+      scope: item.scope,
+      scopeId,
+      cityId: item.cityId || null,
+      cityName: item.cityName || "",
+      propertyId: item.propertyId || null,
+      propertyName: item.propertyName || "",
+      ownerId: item.ownerId || null,
+      occupancyPercent: item.occupancyPercent,
+      activeBookableBeds: item.activeBookableBeds,
+      occupiedBeds: item.occupiedBeds,
+      warningActive: true,
+      status: "watching",
+      refreshWindowMinutes: DEMAND_WATCHLIST_REFRESH_MINUTES,
+      lastCheckedAtMs: nowMs,
+      lastCheckedAt: new Date(nowMs).toISOString(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    watching += 1;
+    opCount += 1;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  for (const watchDoc of existingWatchlistSnap.docs) {
+    if (activeWatchIds.has(watchDoc.id)) {
+      continue;
+    }
+    const data = watchDoc.data() || {};
+    if (String(data.status ?? "") === "below_threshold") {
+      continue;
+    }
+    batch.set(watchDoc.ref, {
+      warningActive: false,
+      status: "below_threshold",
+      lastCheckedAtMs: nowMs,
+      lastCheckedAt: new Date(nowMs).toISOString(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    belowThreshold += 1;
+    opCount += 1;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  batch.set(db.collection("audit_logs").doc(), {
+    actorUserId: "system",
+    actorRole: "system",
+    action: "demand_watchlist_refreshed",
+    entityType: "demand_watchlist",
+    entityId: "all_scopes",
+    metadata: {
+      warningThresholdPercent: DEMAND_WARNING_THRESHOLD_PERCENT,
+      refreshWindowMinutes: DEMAND_WATCHLIST_REFRESH_MINUTES,
+      propertyScopesChecked: propertyStats.length,
+      cityScopesChecked: cityStats.length,
+      watching,
+      belowThreshold,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  opCount += 1;
+  await flushBatch();
+
+  return {
+    ok: true,
+    warningThresholdPercent: DEMAND_WARNING_THRESHOLD_PERCENT,
+    propertyScopesChecked: propertyStats.length,
+    cityScopesChecked: cityStats.length,
+    watching,
+    belowThreshold,
+  };
+});
+
+exports.refreshDemandPricing = onSchedule("every 15 minutes", async () => {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const settings = await readDemandPricingSettings();
+  const [
+    watchlistSnap,
+    overridesSnap,
+    existingPricingSnap,
+  ] = await Promise.all([
+    db.collection(DEMAND_WATCHLIST_COLLECTION).where("status", "==", "watching").get(),
+    db.collection(DEMAND_OVERRIDES_COLLECTION).get(),
+    db.collection(DEMAND_PRICING_COLLECTION).get(),
+  ]);
+
+  const overridesById = new Map();
+  overridesSnap.docs.forEach((overrideDoc) => {
+    overridesById.set(overrideDoc.id, overrideDoc.data() || {});
+  });
+
+  const watchItems = watchlistSnap.docs
+    .map((watchDoc) => ({ id: watchDoc.id, ...(watchDoc.data() || {}) }))
+    .filter((item) => String(item.scope ?? "") === "city" || String(item.scope ?? "") === "property");
+
+  const cityMultipliers = new Map();
+  watchItems
+    .filter((item) => String(item.scope ?? "") === "city")
+    .forEach((item) => {
+      const cityId = String(item.cityId ?? item.scopeId ?? "").trim();
+      if (!cityId) {
+        return;
+      }
+      const docId = demandScopeDocId("city", cityId);
+      const override = overridesById.get(docId);
+      const overrideActive = isDemandOverrideActive(override, nowMs);
+      const multiplier = overrideActive
+        ? 0
+        : getDemandMultiplierPercent("city", item.occupancyPercent, settings);
+      cityMultipliers.set(cityId, {
+        multiplier,
+        overrideActive,
+      });
+    });
+
+  let batch = db.batch();
+  let opCount = 0;
+  let activeSummaries = 0;
+  let inactiveSummaries = 0;
+  let ownerStopped = 0;
+  const seenPricingIds = new Set();
+
+  async function flushBatch() {
+    if (opCount === 0) {
+      return;
+    }
+    await batch.commit();
+    batch = db.batch();
+    opCount = 0;
+  }
+
+  for (const item of watchItems) {
+    const scope = String(item.scope ?? "");
+    const scopeId = scope === "city"
+      ? String(item.cityId ?? item.scopeId ?? "").trim()
+      : String(item.propertyId ?? item.scopeId ?? "").trim();
+    if (!scopeId) {
+      continue;
+    }
+
+    const docId = demandScopeDocId(scope, scopeId);
+    const override = overridesById.get(docId);
+    const overrideActive = isDemandOverrideActive(override, nowMs);
+    const scopeMultiplier = overrideActive
+      ? 0
+      : getDemandMultiplierPercent(scope, item.occupancyPercent, settings);
+    const cityContext = scope === "property"
+      ? cityMultipliers.get(String(item.cityId ?? "").trim()) || { multiplier: 0, overrideActive: false }
+      : { multiplier: scopeMultiplier, overrideActive };
+    const finalMultiplier = overrideActive
+      ? 0
+      : Math.min(
+        Math.max(scopeMultiplier, scope === "property" ? cityContext.multiplier : 0),
+        settings.globalMaxCapPercent
+      );
+    const active = settings.enabled &&
+      !settings.emergencyDisabled &&
+      !overrideActive &&
+      finalMultiplier > 0;
+    const disabledBy = String(override?.disabledBy ?? override?.manuallyDisabledBy ?? "").trim();
+    const stoppedByOwner = overrideActive && disabledBy === "owner";
+    if (stoppedByOwner) {
+      ownerStopped += 1;
+    }
+
+    const ref = db.collection(DEMAND_PRICING_COLLECTION).doc(docId);
+    batch.set(ref, {
+      active,
+      scope,
+      scopeId,
+      cityId: item.cityId || null,
+      cityName: item.cityName || "",
+      propertyId: item.propertyId || null,
+      propertyName: item.propertyName || "",
+      ownerId: item.ownerId || null,
+      occupancyPercent: safePercent(item.occupancyPercent),
+      activeBookableBeds: Number(item.activeBookableBeds ?? 0),
+      occupiedBeds: Number(item.occupiedBeds ?? 0),
+      scopeMultiplierPercent: scopeMultiplier,
+      cityMultiplierPercent: scope === "property" ? cityContext.multiplier : scopeMultiplier,
+      multiplierPercent: finalMultiplier,
+      globalMaxCapPercent: settings.globalMaxCapPercent,
+      warningActive: safePercent(item.occupancyPercent) >= DEMAND_WARNING_THRESHOLD_PERCENT,
+      stoppedByOwner,
+      overrideActive,
+      overrideReason: String(override?.reason ?? ""),
+      overrideExpiresAt: override?.expiresAt ?? null,
+      manuallyDisabledBy: disabledBy || null,
+      emergencyDisabled: settings.emergencyDisabled,
+      pricingEnabled: settings.enabled,
+      reason: active
+        ? demandReason(scope, item.occupancyPercent, finalMultiplier)
+        : (overrideActive
+          ? "Demand pricing is disabled by override"
+          : demandReason(scope, item.occupancyPercent, finalMultiplier)),
+      status: active ? "active" : (overrideActive ? "override_disabled" : "inactive"),
+      calculatedAtMs: nowMs,
+      calculatedAt: nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    seenPricingIds.add(docId);
+    if (active) {
+      activeSummaries += 1;
+    } else {
+      inactiveSummaries += 1;
+    }
+    opCount += 1;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  for (const overrideDoc of overridesSnap.docs) {
+    const override = overrideDoc.data() || {};
+    if (!isDemandOverrideActive(override, nowMs)) {
+      continue;
+    }
+    if (seenPricingIds.has(overrideDoc.id)) {
+      continue;
+    }
+    const scope = String(override.scope ?? "").trim();
+    if (scope !== "property") {
+      continue;
+    }
+    const propertyId = String(override.propertyId ?? "").trim();
+    if (!propertyId) {
+      continue;
+    }
+    const disabledBy = String(override.disabledBy ?? override.manuallyDisabledBy ?? "").trim();
+    const ref = db.collection(DEMAND_PRICING_COLLECTION).doc(overrideDoc.id);
+    batch.set(ref, {
+      active: false,
+      scope: "property",
+      scopeId: propertyId,
+      propertyId,
+      cityId: override.cityId || null,
+      ownerId: override.ownerId || null,
+      multiplierPercent: 0,
+      scopeMultiplierPercent: 0,
+      cityMultiplierPercent: 0,
+      globalMaxCapPercent: settings.globalMaxCapPercent,
+      warningActive: false,
+      stoppedByOwner: disabledBy === "owner",
+      overrideActive: true,
+      overrideReason: String(override.reason ?? ""),
+      overrideExpiresAt: override.expiresAt ?? null,
+      manuallyDisabledBy: disabledBy || null,
+      emergencyDisabled: settings.emergencyDisabled,
+      pricingEnabled: settings.enabled,
+      reason: "Demand pricing is disabled by override",
+      status: "override_disabled",
+      calculatedAtMs: nowMs,
+      calculatedAt: nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    seenPricingIds.add(overrideDoc.id);
+    inactiveSummaries += 1;
+    if (disabledBy === "owner") {
+      ownerStopped += 1;
+    }
+    opCount += 1;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  for (const pricingDoc of existingPricingSnap.docs) {
+    if (seenPricingIds.has(pricingDoc.id)) {
+      continue;
+    }
+    const data = pricingDoc.data() || {};
+    if (data.active === false && String(data.status ?? "") === "below_threshold") {
+      continue;
+    }
+    batch.set(pricingDoc.ref, {
+      active: false,
+      multiplierPercent: 0,
+      scopeMultiplierPercent: 0,
+      cityMultiplierPercent: 0,
+      warningActive: false,
+      reason: "Demand pricing is below threshold",
+      status: "below_threshold",
+      calculatedAtMs: nowMs,
+      calculatedAt: nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    inactiveSummaries += 1;
+    opCount += 1;
+    if (opCount >= 450) {
+      await flushBatch();
+    }
+  }
+
+  batch.set(db.collection("audit_logs").doc(), {
+    actorUserId: "system",
+    actorRole: "system",
+    action: "demand_pricing_refreshed",
+    entityType: "demand_pricing",
+    entityId: "all_scopes",
+    metadata: {
+      watchItems: watchItems.length,
+      activeSummaries,
+      inactiveSummaries,
+      ownerStopped,
+      pricingEnabled: settings.enabled,
+      emergencyDisabled: settings.emergencyDisabled,
+      globalMaxCapPercent: settings.globalMaxCapPercent,
+      refreshWindowMinutes: DEMAND_WATCHLIST_REFRESH_MINUTES,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  opCount += 1;
+  await flushBatch();
+
+  return {
+    ok: true,
+    watchItems: watchItems.length,
+    activeSummaries,
+    inactiveSummaries,
+    ownerStopped,
+    pricingEnabled: settings.enabled,
+    emergencyDisabled: settings.emergencyDisabled,
+    globalMaxCapPercent: settings.globalMaxCapPercent,
+  };
 });
 
 exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {

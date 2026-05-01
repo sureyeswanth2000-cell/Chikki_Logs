@@ -41,13 +41,26 @@ function addHours(date, hours) {
 }
 
 function priceForBed(duration, bed) {
+    const displayPrices = {
+        hourly: Number(bed?.displayHourlyPrice),
+        overnight: Number(bed?.displayOvernightPrice),
+        overday: Number(bed?.displayOverdayPrice),
+    };
+    if (Number.isFinite(displayPrices[duration])) {
+        return displayPrices[duration];
+    }
     const prices = {
         hourly: Number(bed?.hourlyPrice ?? 120),
         overnight: Number(bed?.overnightPrice ?? 650),
         overday: Number(bed?.overdayPrice ?? 900),
     };
     const acExtra = String(bed?.bedType ?? "").toUpperCase() === "AC" ? 50 : 0;
-    return (prices[duration] ?? prices.hourly) + acExtra;
+    const basePrice = (prices[duration] ?? prices.hourly) + acExtra;
+    const ownerRevenueSharePercent = Math.max(0, Math.min(100, Number(bed?.ownerRevenueSharePercent ?? 10)));
+    const gatewayFeePercent = Math.max(0, Math.min(100, Number(bed?.gatewayFeePercent ?? 2)));
+    const platformRevenue = Math.round(basePrice * (ownerRevenueSharePercent / 100));
+    const gatewayFee = Math.round(basePrice * (gatewayFeePercent / 100));
+    return basePrice + platformRevenue + gatewayFee;
 }
 
 function maskAadhaar(value) {
@@ -290,6 +303,14 @@ function BookingContent() {
                                     {Number.isFinite(Number(listing.distanceFromUserKm)) ? (
                                         <p className="mt-1 text-xs font-semibold text-sky-700">Distance from you: {formatDistance(listing.distanceFromUserKm)}</p>
                                     ) : null}
+                                    {listing.demandActive ? (
+                                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                                            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">High Demand</span>
+                                            <span className="text-xs font-semibold text-amber-700">{String(listing.demandSource).toLowerCase() === "city" ? "City demand" : "Property demand"}</span>
+                                        </div>
+                                    ) : listing.demandWarningActive ? (
+                                        <p className="mt-2 text-xs font-semibold text-amber-700">Demand is rising. Book now before prices increase.</p>
+                                    ) : null}
                                 </div>
                                 <span className="rounded-full bg-sky-100 px-3 py-1 text-xs font-bold text-sky-800">
                                     {prettyDuration(duration)}
@@ -314,6 +335,11 @@ function BookingContent() {
                                                     <span className="block text-sm font-semibold text-slate-900">{bed.bedCode || "Bed"}</span>
                                                     <span className="mt-1 block text-xs text-slate-500">{bed.bedType} | Room ID {bed.roomId}</span>
                                                     <span className="mt-2 block text-sm font-bold text-slate-900">INR {priceForBed(duration, bed)}</span>
+                                                    {bed.demandActive ? (
+                                                        <span className="mt-1 inline-block rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-bold text-amber-800">High Demand</span>
+                                                    ) : bed.demandWarningActive ? (
+                                                        <span className="mt-1 block text-xs font-semibold text-amber-700">Demand rising</span>
+                                                    ) : null}
                                                     <span className="mt-1 block text-xs font-semibold text-slate-600">{ratingText(bed.ratingAverage, bed.ratingCount)}</span>
                                                 </label>
                                             ))}
@@ -353,8 +379,13 @@ function BookingContent() {
                                             <div><dt className="text-xs font-semibold text-slate-500">Bed</dt><dd>{selectedBed?.bedCode} ({selectedBed?.bedType})</dd></div>
                                             <div><dt className="text-xs font-semibold text-slate-500">Start</dt><dd>{checkInAt}</dd></div>
                                             <div><dt className="text-xs font-semibold text-slate-500">Stay Type</dt><dd>{prettyDuration(duration)}</dd></div>
-                                            <div><dt className="text-xs font-semibold text-slate-500">Displayed Rate</dt><dd>INR {priceForBed(duration, selectedBed)}</dd></div>
+                                            <div><dt className="text-xs font-semibold text-slate-500">All-inclusive rate</dt><dd>INR {priceForBed(duration, selectedBed)}</dd></div>
                                         </dl>
+                                        {selectedBed?.demandActive ? (
+                                            <p className="mt-3 text-xs font-semibold text-amber-700">High Demand is included in this all-inclusive rate.</p>
+                                        ) : selectedBed?.demandWarningActive ? (
+                                            <p className="mt-3 text-xs font-semibold text-amber-700">Demand is rising for this area.</p>
+                                        ) : null}
                                     </div>
 
                                     {aadhaarAlreadyOnFileForBooking ? (
