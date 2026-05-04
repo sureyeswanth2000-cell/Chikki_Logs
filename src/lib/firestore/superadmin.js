@@ -7,6 +7,7 @@ import {
   revealAadhaarBreakGlass,
   runCommissionDuesNow,
   setDemandScopeOverride,
+  setOwnerCommissionOverride,
   setUserRole,
   updateDemandPricingSettings,
   updatePlatformDefaultCommission,
@@ -543,21 +544,55 @@ export async function dismissOperatorNotice(noticeId) {
 export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr }) {
   const clamped = Math.min(120, Math.max(5, Number(checkInGraceMinutes) || 15));
   const nextPlatformFee = Math.min(999, Math.max(0, Number(platformFeeInr) || DEFAULT_PLATFORM_FEE_INR));
-  await setDoc(
-    doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC),
-    {
-      _type: "platform_settings",
-      checkInGraceMinutes: clamped,
-      platformFeeInr: nextPlatformFee,
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
-  await writeAuditLog("platform_settings_updated", "platform_settings", PLATFORM_SETTINGS_CITY_DOC, {
+  // Write to both canonical platform_settings/main AND legacy _platform_cfg for backward compat
+  await Promise.all([
+    setDoc(
+      doc(db, COLLECTIONS.platformSettings, "main"),
+      {
+        checkInGraceMinutes: clamped,
+        platformFeeInr: nextPlatformFee,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ),
+    setDoc(
+      doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC),
+      {
+        _type: "platform_settings",
+        checkInGraceMinutes: clamped,
+        platformFeeInr: nextPlatformFee,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    ),
+  ]);
+  await writeAuditLog("platform_settings_updated", "platform_settings", "main", {
     checkInGraceMinutes: clamped,
     platformFeeInr: nextPlatformFee,
   });
   return { checkInGraceMinutes: clamped, platformFeeInr: nextPlatformFee };
+}
+
+export async function getOwnersForCommissionManagement() {
+  const snap = await getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "owner")));
+  return snap.docs.map((d) => {
+    const data = d.data() || {};
+    return {
+      id: d.id,
+      name: String(data.name ?? ""),
+      phone: String(data.phone ?? ""),
+      ownerRevenueSharePercent:
+        typeof data.ownerRevenueSharePercent === "number" ? data.ownerRevenueSharePercent : null,
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function saveOwnerCommissionOverride(ownerId, percent, clear = false) {
+  const result = await setOwnerCommissionOverride({ ownerId, percent, clear });
+  return {
+    ownerId,
+    ownerRevenueSharePercent: result?.ownerRevenueSharePercent ?? null,
+  };
 }
 
 export async function setCityScarcityMode({ cityId, enabled }) {

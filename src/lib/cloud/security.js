@@ -237,3 +237,13 @@ export async function runCommissionDuesNow() {
     throw new Error(toMessage(error, "Could not run commission due creation."));
   }
 }
+
+export async function setOwnerCommissionOverride(payload) {
+  const callable = httpsCallable(functionsClient(), "setOwnerCommissionOverride");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update owner commission override."));
+  }
+}

@@ -207,7 +207,7 @@ service cloud.firestore {
 
     match /platform_settings/{docId} {
       allow read: if isInternalOperator();
-      allow write: if isSuperadmin();
+      allow write: if isInternalOperator();
     }
 
     match /demand_watchlist/{scopeId} {

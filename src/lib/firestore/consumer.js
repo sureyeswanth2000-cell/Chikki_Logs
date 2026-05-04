@@ -11,6 +11,12 @@ import { distanceKmBetween } from "@/lib/geo";
 import { applyDemandMultiplier } from "@/lib/demand-pricing";
 import pilotCities from "../../../data/pilot-cities.json";
 const DEFAULT_PLATFORM_FEE_INR = 9;
+const DEFAULT_PLATFORM_COMMISSION_PERCENT = 5;
+
+function applyCommission(basePrice, commissionPercent) {
+    const pct = Math.max(0, Math.min(100, Number(commissionPercent) || 0));
+    return Math.round(basePrice * (1 + pct / 100));
+}
 function toTime(value) {
     const parsed = new Date(value).getTime();
     if (Number.isNaN(parsed)) {
@@ -37,16 +43,22 @@ function computeBasePrice(duration, bedType, ownerPrices = {}) {
     return baseByDuration[duration] + acExtra;
 }
 
-async function readPlatformFeeInr() {
+async function readPlatformSettings() {
     try {
-        const snapshot = await getDoc(doc(db, COLLECTIONS.cities, "_platform_cfg"));
-        if (!snapshot.exists()) {
-            return DEFAULT_PLATFORM_FEE_INR;
-        }
-        const next = Number(snapshot.data()?.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR);
-        return Number.isFinite(next) ? Math.max(0, Math.min(999, Math.round(next))) : DEFAULT_PLATFORM_FEE_INR;
+        // Try canonical location first, then fall back to legacy
+        const [mainSnap, legacySnap] = await Promise.all([
+            getDoc(doc(db, COLLECTIONS.platformSettings, "main")),
+            getDoc(doc(db, COLLECTIONS.cities, "_platform_cfg")),
+        ]);
+        const main = mainSnap.exists() ? (mainSnap.data() || {}) : {};
+        const legacy = legacySnap.exists() ? (legacySnap.data() || {}) : {};
+        const feeRaw = main.platformFeeInr ?? legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR;
+        const commRaw = main.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT;
+        const fee = Number.isFinite(Number(feeRaw)) ? Math.max(0, Math.min(999, Math.round(Number(feeRaw)))) : DEFAULT_PLATFORM_FEE_INR;
+        const comm = Math.max(0, Math.min(100, Number(commRaw) || DEFAULT_PLATFORM_COMMISSION_PERCENT));
+        return { platformFeeInr: fee, platformCommissionPercent: comm };
     } catch {
-        return DEFAULT_PLATFORM_FEE_INR;
+        return { platformFeeInr: DEFAULT_PLATFORM_FEE_INR, platformCommissionPercent: DEFAULT_PLATFORM_COMMISSION_PERCENT };
     }
 }
 function demandDocId(scope, scopeId) {
@@ -415,7 +427,9 @@ export async function getListingsByCity(filters) {
         ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
         : 0;
     const cityDemandSummary = await readDemandSummary("city", filters.cityId);
-    const platformFeeInr = await readPlatformFeeInr();
+    const platformSettings = await readPlatformSettings();
+    const platformFeeInr = platformSettings.platformFeeInr;
+    const platformCommissionPercent = platformSettings.platformCommissionPercent;
 
     const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
     const propertySnapshot = await getDocs(propertiesQuery);
@@ -435,9 +449,33 @@ export async function getListingsByCity(filters) {
             status: String(data.status ?? "inactive"),
         };
     });
+
+    // Fetch owner commission overrides in batch for all properties
+    const uniqueOwnerIds = [...new Set(properties.map((p) => p.ownerId).filter(Boolean))];
+    const ownerCommissionMap = {};
+    if (uniqueOwnerIds.length > 0) {
+        await Promise.all(uniqueOwnerIds.map(async (ownerId) => {
+            try {
+                const ownerSnap = await getDoc(doc(db, COLLECTIONS.users, ownerId));
+                if (ownerSnap.exists()) {
+                    const ownerData = ownerSnap.data() || {};
+                    const override = ownerData.ownerRevenueSharePercent;
+                    ownerCommissionMap[ownerId] = (typeof override === "number")
+                        ? Math.max(0, Math.min(100, override))
+                        : platformCommissionPercent;
+                } else {
+                    ownerCommissionMap[ownerId] = platformCommissionPercent;
+                }
+            } catch {
+                ownerCommissionMap[ownerId] = platformCommissionPercent;
+            }
+        }));
+    }
+
     const listings = [];
 
     for (const property of properties) {
+        const ownerCommissionPercent = ownerCommissionMap[property.ownerId] ?? platformCommissionPercent;
         const propertyDemandSummary = await readDemandSummary("property", property.id);
         const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
         const demandMultiplierPercent = Number(demandSummary.multiplierPercent ?? 0);
@@ -507,21 +545,21 @@ export async function getListingsByCity(filters) {
             hourlyPrice: bed.hourlyPrice,
             overnightPrice: bed.overnightPrice,
             overdayPrice: bed.overdayPrice,
-            displayHourlyPrice: applyDemandMultiplier(computeBasePrice("hourly", bed.bedType, {
+            displayHourlyPrice: applyCommission(applyDemandMultiplier(computeBasePrice("hourly", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent),
-            displayOvernightPrice: applyDemandMultiplier(computeBasePrice("overnight", bed.bedType, {
+            }), demandMultiplierPercent), ownerCommissionPercent),
+            displayOvernightPrice: applyCommission(applyDemandMultiplier(computeBasePrice("overnight", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent),
-            displayOverdayPrice: applyDemandMultiplier(computeBasePrice("overday", bed.bedType, {
+            }), demandMultiplierPercent), ownerCommissionPercent),
+            displayOverdayPrice: applyCommission(applyDemandMultiplier(computeBasePrice("overday", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent),
+            }), demandMultiplierPercent), ownerCommissionPercent),
             demandActive: Boolean(demandSummary.active),
             demandWarningActive: Boolean(demandSummary.warningActive),
             demandMultiplierPercent,
@@ -543,7 +581,7 @@ export async function getListingsByCity(filters) {
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
         }));
-        const priceCandidates = basePriceCandidates.map((amount) => applyDemandMultiplier(amount, demandMultiplierPercent));
+        const priceCandidates = basePriceCandidates.map((amount) => applyCommission(applyDemandMultiplier(amount, demandMultiplierPercent), ownerCommissionPercent));
         const hourlyPriceCandidates = filteredBedOptions.map((item) => item.displayHourlyPrice);
         const overnightPriceCandidates = filteredBedOptions.map((item) => item.displayOvernightPrice);
         const baseHourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {

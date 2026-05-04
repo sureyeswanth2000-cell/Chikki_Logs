@@ -14,8 +14,11 @@ import {
   getOperatorNotices,
   getOwnerApplications,
   getOwnerCommissionDuesForOperator,
+  getOwnersForCommissionManagement,
   getPlatformSettings,
   runCommissionDuesManual,
+  saveOwnerCommissionOverride,
+  savePlatformDefaultCommission,
   searchUserByPhone,
   setCityScarcityMode,
   updateCity,
@@ -62,10 +65,20 @@ export default function OperatorPage() {
   const [savingCity, setSavingCity] = useState(false);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
   const [platformFeeInr, setPlatformFeeInr] = useState(9);
+  const [platformCommissionPercent, setPlatformCommissionPercent] = useState(5);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
   const [settingsNotice, setSettingsNotice] = useState(null);
+  const [commissionSaving, setCommissionSaving] = useState(false);
+  const [commissionError, setCommissionError] = useState(null);
+  const [commissionNotice, setCommissionNotice] = useState(null);
+  const [ownersList, setOwnersList] = useState([]);
+  const [ownersLoading, setOwnersLoading] = useState(false);
+  const [ownerOverrideSavingId, setOwnerOverrideSavingId] = useState("");
+  const [ownerOverrideValues, setOwnerOverrideValues] = useState({});
+  const [ownerOverrideError, setOwnerOverrideError] = useState(null);
+  const [ownerOverrideNotice, setOwnerOverrideNotice] = useState(null);
   const [dueRows, setDueRows] = useState([]);
   const [dueLoading, setDueLoading] = useState(false);
   const [dueNotice, setDueNotice] = useState(null);
@@ -120,10 +133,28 @@ export default function OperatorPage() {
       const settings = await getPlatformSettings();
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
+      setPlatformCommissionPercent(Number(settings?.platformCommissionPercent ?? 5));
     } catch {
-      // default remains 15 — do not block the UI
+      // default remains — do not block the UI
     } finally {
       setSettingsLoading(false);
+    }
+  }, []);
+
+  const loadOwnersList = useCallback(async () => {
+    setOwnersLoading(true);
+    try {
+      const owners = await getOwnersForCommissionManagement();
+      setOwnersList(owners);
+      const initValues = {};
+      owners.forEach((o) => {
+        initValues[o.id] = o.ownerRevenueSharePercent !== null ? String(o.ownerRevenueSharePercent) : "";
+      });
+      setOwnerOverrideValues(initValues);
+    } catch {
+      setOwnersList([]);
+    } finally {
+      setOwnersLoading(false);
     }
   }, []);
 
@@ -156,7 +187,46 @@ export default function OperatorPage() {
     void loadSettings();
     void loadOwnerDues();
     void loadOperatorNotices();
-  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices]);
+    void loadOwnersList();
+  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices, loadOwnersList]);
+
+  async function handleSaveCommission(event) {
+    event.preventDefault();
+    setCommissionSaving(true);
+    setCommissionError(null);
+    setCommissionNotice(null);
+    try {
+      const result = await savePlatformDefaultCommission(platformCommissionPercent);
+      setPlatformCommissionPercent(Number(result?.platformCommissionPercent ?? platformCommissionPercent));
+      setCommissionNotice(`Platform default commission updated to ${result?.platformCommissionPercent ?? platformCommissionPercent}%.${result?.affectedOwnerCount > 0 ? ` ${result.affectedOwnerCount} owners were bumped to the new default.` : ""}`);
+      await loadOwnersList();
+    } catch (error) {
+      setCommissionError(error instanceof Error ? error.message : "Could not update platform commission.");
+    } finally {
+      setCommissionSaving(false);
+    }
+  }
+
+  async function handleSaveOwnerOverride(ownerId, clear = false) {
+    setOwnerOverrideSavingId(ownerId);
+    setOwnerOverrideError(null);
+    setOwnerOverrideNotice(null);
+    try {
+      const percent = clear ? 0 : Number(ownerOverrideValues[ownerId] ?? "");
+      await saveOwnerCommissionOverride(ownerId, percent, clear);
+      setOwnersList((prev) => prev.map((o) =>
+        o.id === ownerId ? { ...o, ownerRevenueSharePercent: clear ? null : percent } : o
+      ));
+      if (clear) {
+        setOwnerOverrideValues((prev) => ({ ...prev, [ownerId]: "" }));
+      }
+      setOwnerOverrideNotice(clear ? "Override cleared — owner now uses platform default." : `Commission override set to ${percent}%.`);
+    } catch (error) {
+      setOwnerOverrideError(error instanceof Error ? error.message : "Could not save override.");
+    } finally {
+      setOwnerOverrideSavingId("");
+    }
+  }
 
   async function handleConfirmDue(dueId) {
     if (!dueId) return;
@@ -557,6 +627,146 @@ export default function OperatorPage() {
                 {settingsSaving ? "Saving..." : "Save Settings"}
               </button>
             </form>
+          )}
+        </section>
+
+        {/* Platform Default Commission */}
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-slate-800">Platform Default Commission</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            The default revenue share % charged to all owners. Owners without a custom override use this rate.
+            Raising this will auto-bump any owner currently below the new default.
+          </p>
+
+          {commissionError ? (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {commissionError}
+            </div>
+          ) : null}
+          {commissionNotice ? (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {commissionNotice}
+            </div>
+          ) : null}
+
+          {settingsLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading...</p>
+          ) : (
+            <form className="mt-4 flex flex-col gap-3 md:flex-row md:items-end" onSubmit={(event) => void handleSaveCommission(event)}>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Default Commission (%)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={platformCommissionPercent}
+                  onChange={(event) => setPlatformCommissionPercent(Number(event.target.value || 0))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={commissionSaving}
+                className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {commissionSaving ? "Saving..." : "Save Commission Default"}
+              </button>
+            </form>
+          )}
+        </section>
+
+        {/* Per-Owner Commission Overrides */}
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-slate-800">Per-Owner Commission Overrides</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            Set a custom commission % per owner. Leave blank to inherit platform default.
+          </p>
+
+          {ownerOverrideError ? (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {ownerOverrideError}
+            </div>
+          ) : null}
+          {ownerOverrideNotice ? (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {ownerOverrideNotice}
+            </div>
+          ) : null}
+
+          {ownersLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading owners...</p>
+          ) : ownersList.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">No owners found.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    <th className="pb-2 pr-4">Owner</th>
+                    <th className="pb-2 pr-4">Phone</th>
+                    <th className="pb-2 pr-4">Current Rate</th>
+                    <th className="pb-2 pr-4">Override %</th>
+                    <th className="pb-2">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ownersList.map((owner) => (
+                    <tr key={owner.id} className="border-b border-slate-100 last:border-0">
+                      <td className="py-2 pr-4 font-medium text-slate-800">{owner.name || "—"}</td>
+                      <td className="py-2 pr-4 text-slate-500">{owner.phone || "—"}</td>
+                      <td className="py-2 pr-4">
+                        {owner.ownerRevenueSharePercent !== null ? (
+                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-700">
+                            {owner.ownerRevenueSharePercent}% (custom)
+                          </span>
+                        ) : (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                            {platformCommissionPercent}% (default)
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={1}
+                          placeholder={String(platformCommissionPercent)}
+                          value={ownerOverrideValues[owner.id] ?? ""}
+                          onChange={(event) => setOwnerOverrideValues((prev) => ({ ...prev, [owner.id]: event.target.value }))}
+                          className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-sm outline-none focus:border-indigo-400"
+                        />
+                      </td>
+                      <td className="py-2">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveOwnerOverride(owner.id, false)}
+                            disabled={ownerOverrideSavingId === owner.id || ownerOverrideValues[owner.id] === ""}
+                            className="rounded-full bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                          >
+                            {ownerOverrideSavingId === owner.id ? "Saving..." : "Set"}
+                          </button>
+                          {owner.ownerRevenueSharePercent !== null ? (
+                            <button
+                              type="button"
+                              onClick={() => void handleSaveOwnerOverride(owner.id, true)}
+                              disabled={ownerOverrideSavingId === owner.id}
+                              className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            >
+                              Clear
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 

@@ -1277,8 +1277,8 @@ exports.updatePlatformDefaultCommission = onCall({ cors: true }, async (request)
 
   const callerUid = request.auth.uid;
   const callerRole = await getCurrentRole(callerUid);
-  if (callerRole !== "superadmin") {
-    throw new HttpsError("permission-denied", "Only superadmin can update the platform default commission.");
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can update the platform default commission.");
   }
 
   const input = request.data || {};
@@ -1357,8 +1357,8 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
 
   const callerUid = request.auth.uid;
   const callerRole = await getCurrentRole(callerUid);
-  if (callerRole !== "superadmin") {
-    throw new HttpsError("permission-denied", "Only superadmin can update platform settings.");
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can update platform settings.");
   }
 
   const input = request.data || {};
@@ -1404,6 +1404,80 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
       platformCommissionPercent: currentSettings.platformCommissionPercent,
     },
   };
+});
+
+exports.setOwnerCommissionOverride = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can set owner commission overrides.");
+  }
+
+  const input = request.data || {};
+  const ownerId = normalizeText(input.ownerId, 128);
+  if (!ownerId) {
+    throw new HttpsError("invalid-argument", "ownerId is required.");
+  }
+
+  const ownerRef = db.collection("users").doc(ownerId);
+  const ownerSnap = await ownerRef.get();
+  if (!ownerSnap.exists) {
+    throw new HttpsError("not-found", "Owner not found.");
+  }
+  const ownerData = ownerSnap.data() || {};
+  if (ownerData.role !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+
+  const hasClear = input.clear === true;
+  const oldPercent = typeof ownerData.ownerRevenueSharePercent === "number"
+    ? ownerData.ownerRevenueSharePercent
+    : null;
+
+  let newPercent;
+  if (hasClear) {
+    // Remove override — owner will use platform default
+    await ownerRef.update({
+      ownerRevenueSharePercent: FieldValue.delete(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    newPercent = null;
+  } else {
+    if (!Object.prototype.hasOwnProperty.call(input, "percent")) {
+      throw new HttpsError("invalid-argument", "percent is required (or set clear:true to remove override).");
+    }
+    newPercent = clampPlatformCommissionPercent(input.percent);
+    await ownerRef.update({
+      ownerRevenueSharePercent: newPercent,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    // Notify owner of commission change
+    await db.collection("owner_notices").add({
+      ownerId,
+      type: "commission_updated",
+      title: "Your commission rate was updated",
+      message: `Your platform commission has been updated from ${oldPercent !== null ? `${oldPercent}%` : "platform default"} to ${newPercent}%. This affects the prices consumers see for your beds.`,
+      oldCommission: oldPercent,
+      newCommission: newPercent,
+      dismissed: false,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: hasClear ? "owner_commission_override_cleared" : "owner_commission_override_set",
+    entityType: "user",
+    entityId: ownerId,
+    metadata: { oldPercent, newPercent },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, ownerId, ownerRevenueSharePercent: newPercent };
 });
 
 exports.setCityScarcityMode = onCall({ cors: true }, async (request) => {
