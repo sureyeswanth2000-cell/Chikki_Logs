@@ -84,6 +84,7 @@ function ConsumerContent() {
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
     const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
     const [checkoutPaymentMethodByBooking, setCheckoutPaymentMethodByBooking] = useState({});
+    const [aadhaarBannerDismissed, setAadhaarBannerDismissed] = useState(false);
     const initialSearchAppliedRef = useRef(false);
 
     const selectedCityName = useMemo(() => cities.find((item) => item.id === cityId)?.name ?? "", [cities, cityId]);
@@ -316,6 +317,34 @@ function ConsumerContent() {
                     </p>
                 </div>
             </div>
+
+            {/* Aadhaar nudge: show after user has at least one booking and has not set Aadhaar */}
+            {user && !aadhaarBannerDismissed && openBookings.length > 0 && !profile?.aadhaarRefId ? (
+              <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                <span className="mt-0.5 shrink-0 text-base">&#x1F4CB;</span>
+                <div className="flex-1">
+                  <strong>Add your Aadhaar before your next booking</strong>
+                  <p className="mt-1 text-xs text-amber-700">
+                    Aadhaar verification is required to keep booking beds. Add it now from your profile.
+                  </p>
+                  <div className="mt-2 flex gap-2">
+                    <a
+                      href="/profile"
+                      className="rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-700"
+                    >
+                      Go to Profile
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => setAadhaarBannerDismissed(true)}
+                      className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <p className="mt-3 text-slate-700">Browse by city, confirm your location, filter nearby listings, and book available beds.</p>
 

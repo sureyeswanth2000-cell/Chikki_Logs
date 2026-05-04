@@ -1480,6 +1480,49 @@ exports.setOwnerCommissionOverride = onCall({ cors: true }, async (request) => {
   return { ok: true, ownerId, ownerRevenueSharePercent: newPercent };
 });
 
+// Operator/superadmin can manually unblock bookings for an owner despite pending dues
+exports.setOwnerBookingBlock = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can manage booking blocks.");
+  }
+
+  const input = request.data || {};
+  const ownerId = normalizeText(input.ownerId, 128);
+  if (!ownerId) throw new HttpsError("invalid-argument", "ownerId is required.");
+
+  // unblock=true → force allow bookings despite dues; unblock=false → restore normal dues check
+  const unblock = input.unblock !== false; // default true (unblock)
+
+  const ownerRef = db.collection("users").doc(ownerId);
+  const ownerSnap = await ownerRef.get();
+  if (!ownerSnap.exists) throw new HttpsError("not-found", "Owner not found.");
+  if ((ownerSnap.data() || {}).role !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+
+  await ownerRef.update({
+    bookingBlockOverride: unblock,
+    bookingBlockOverrideSetBy: callerUid,
+    bookingBlockOverrideAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: unblock ? "owner_booking_block_lifted" : "owner_booking_block_restored",
+    entityType: "user",
+    entityId: ownerId,
+    metadata: { unblock, reason: String(input.reason ?? "") },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, ownerId, bookingBlockOverride: unblock };
+});
+
 exports.setCityScarcityMode = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
 
@@ -1853,7 +1896,8 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   const ownerData = ownerSnap && ownerSnap.exists ? (ownerSnap.data() || {}) : {};
 
   // Auto-block: check unpaid commission dues for this property's owner
-  if (ownerId) {
+  // Skip the block if operator has manually overridden (bookingBlockOverride: true)
+  if (ownerId && !ownerData.bookingBlockOverride) {
     const pendingDuesSnap = await db.collection("owner_commission_dues")
       .where("ownerId", "==", ownerId)
       .where("status", "==", "pending")

@@ -17,7 +17,7 @@
 - [x] Completed bookings can be rated once from booking history; the rating stays on the booking record.
 - [x] Bed rating averages/counts should be visible during listing search and exact bed selection.
 - [x] Aadhaar should be required from the second booking onward.
-- [ ] After the first booking completes, show a home-screen popup asking the consumer to add Aadhaar before the next booking.
+- [x] After the first booking completes, show a home-screen popup asking the consumer to add Aadhaar before the next booking.
 - [ ] Future train tracking should accept train number or PNR number and notify the consumer like an alarm when the train is nearby.
 - [ ] Future Aadhaar verification should use a third-party verification provider.
 - [x] This spec supersedes the older booking-flow wording lower in the file.
@@ -86,7 +86,7 @@
 - [ ] Add missing modify-booking option for existing bookings so consumers can change booking timing/details after creation when allowed by booking rules
 - [ ] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
 - [x] Booking history should show how much the consumer paid / final amount due for each booking
-- [ ] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
+- [x] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
 - [ ] Improve post-login return into the exact booking state, not only the consumer search context
 - [ ] Verify owner-side visibility immediately after consumer booking across all booking states
 - [ ] Harden booking flow against all dead ends and partial-state failures
@@ -130,7 +130,7 @@
 - [x] Add operator action to run commission due creation on-demand in addition to nightly schedule
 - [x] Add owner dashboard quick card for pending platform dues summary
 - [x] Auto-block new consumer bookings for an owner/property when unpaid commission instances >= 10 OR pending commission due exceeds INR 500
-- [ ] Auto-unblock booking after due settlement is confirmed, and provide operator manual unblock control with audit trail
+- [x] Auto-unblock booking after due settlement is confirmed, and provide operator manual unblock control with audit trail
 - [ ] Owners with high platform commission % (e.g., ≥ 25%) should receive special platform privileges or dedicated support — define privilege tiers, what benefits each tier grants, and implement in-app indicators and backend enforcement
 - [ ] Deploy Razorpay keys/secrets in Firebase Functions environment and run live-sandbox end-to-end checkout + webhook verification on production URL
 
@@ -184,7 +184,7 @@
 - [x] Script or one-time admin tool to remove existing duplicate city records (e.g., two "kavali, andhrapradesh" entries) — `scripts/cleanup-duplicate-cities.mjs`
 
 ## Internal Roles
-- [ ] Add role-change history view inside operator and superadmin consoles
+- [x] Add role-change history view inside operator and superadmin consoles
 - [ ] Add superadmin-only UX for promoting users into operator role more safely with confirmation language
 - [x] Add superadmin-only platform setting to control no-check-in timeout minutes
 - [x] Add city-level safe scarcity controls for superadmin and operator
@@ -193,7 +193,7 @@
 ## Superadmin Growth Dashboard
 - [x] 7-day booking trend bar chart — daily booking counts + gross revenue per day displayed in the Growth tab
 - [x] All-time city breakdown table — city ranking by total bookings and gross revenue
-- [ ] Add a daily growth overview section in the superadmin Overview tab — show total bookings, check-ins, cancellations, and revenue for today vs. yesterday
+- [x] Add a daily growth overview section in the superadmin Overview tab — show total bookings, check-ins, cancellations, and revenue for today vs. yesterday
 - [ ] Break down daily metrics by city — each city row shows today's booking count, revenue, and active beds so superadmin can spot high/low performing cities at a glance
 - [ ] Add a top-performing cities ranking on the overview — sorted by bookings today or revenue today
 - [ ] Persist daily snapshot data to Firestore (e.g., `daily_snapshots/{date}`) so historical growth data survives page reloads and can be charted over time

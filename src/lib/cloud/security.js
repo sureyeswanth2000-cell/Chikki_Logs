@@ -247,3 +247,13 @@ export async function setOwnerCommissionOverride(payload) {
     throw new Error(toMessage(error, "Could not update owner commission override."));
   }
 }
+
+export async function setOwnerBookingBlock(payload) {
+  const callable = httpsCallable(functionsClient(), "setOwnerBookingBlock");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update owner booking block."));
+  }
+}

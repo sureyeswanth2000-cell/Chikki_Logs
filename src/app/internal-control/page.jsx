@@ -9,15 +9,19 @@ import {
   approveOwnerApplication,
   deleteCity,
   getCitiesWithOwners,
+  getDailyGrowthOverview,
   getDashboardMetrics,
   getGrowthStats,
   getOwnerApplications,
+  getOwnersWithBlockStatus,
   getPlatformSettings,
+  getRoleChangeHistory,
   rejectOwnerApplication,
   revealAadhaarForInvestigation,
   savePlatformDefaultCommission,
   searchUserByPhone,
   setCityScarcityMode,
+  setOwnerBookingBlockOverride,
   updateCity,
   updateManagedUserRole,
   updatePlatformSettings,
@@ -150,6 +154,16 @@ export default function InternalControlPage() {
   const [growthStats, setGrowthStats] = useState(null);
   const [growthLoading, setGrowthLoading] = useState(false);
   const [growthError, setGrowthError] = useState(null);
+  const [dailyOverview, setDailyOverview] = useState(null);
+  const [dailyOverviewLoading, setDailyOverviewLoading] = useState(false);
+  const [dailyOverviewError, setDailyOverviewError] = useState(null);
+  const [blockOwners, setBlockOwners] = useState([]);
+  const [blockOwnersLoading, setBlockOwnersLoading] = useState(false);
+  const [blockSavingId, setBlockSavingId] = useState("");
+  const [blockNotice, setBlockNotice] = useState(null);
+  const [blockError, setBlockError] = useState(null);
+  const [roleChanges, setRoleChanges] = useState([]);
+  const [roleChangesLoading, setRoleChangesLoading] = useState(false);
   const [identityForm, setIdentityForm] = useState({
     aadhaarRefId: "",
     targetUserId: "",
@@ -223,13 +237,50 @@ export default function InternalControlPage() {
     }
   }, []);
 
+  const loadDailyOverview = useCallback(async () => {
+    setDailyOverviewLoading(true);
+    setDailyOverviewError(null);
+    try {
+      setDailyOverview(await getDailyGrowthOverview());
+    } catch (error) {
+      setDailyOverviewError(error instanceof Error ? error.message : "Could not load daily overview.");
+    } finally {
+      setDailyOverviewLoading(false);
+    }
+  }, []);
+
+  const loadBlockOwners = useCallback(async () => {
+    setBlockOwnersLoading(true);
+    try {
+      setBlockOwners(await getOwnersWithBlockStatus());
+    } catch {
+      setBlockOwners([]);
+    } finally {
+      setBlockOwnersLoading(false);
+    }
+  }, []);
+
+  const loadRoleChanges = useCallback(async () => {
+    setRoleChangesLoading(true);
+    try {
+      setRoleChanges(await getRoleChangeHistory(50));
+    } catch {
+      setRoleChanges([]);
+    } finally {
+      setRoleChangesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadMetrics();
     void loadCities();
     void loadApplications();
     void loadSettings();
     void loadGrowth();
-  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings]);
+    void loadDailyOverview();
+    void loadBlockOwners();
+    void loadRoleChanges();
+  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings, loadDailyOverview, loadBlockOwners, loadRoleChanges]);
 
   useEffect(() => {
     if (!identityResult || identityCountdown <= 0) return undefined;
@@ -529,6 +580,24 @@ export default function InternalControlPage() {
       setAppsNotice(`${application.businessName} was rejected.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Rejection failed.");
+    }
+  }
+
+  async function handleToggleBookingBlock(owner) {
+    const nextUnblock = !owner.bookingBlockOverride;
+    setBlockSavingId(owner.id);
+    setBlockError(null);
+    setBlockNotice(null);
+    try {
+      await setOwnerBookingBlockOverride(owner.id, nextUnblock, nextUnblock ? "Manually unblocked by superadmin" : "Block override removed by superadmin");
+      setBlockOwners((prev) =>
+        prev.map((o) => o.id === owner.id ? { ...o, bookingBlockOverride: nextUnblock } : o)
+      );
+      setBlockNotice(nextUnblock ? `Bookings unblocked for ${owner.name}.` : `Block override removed for ${owner.name}.`);
+    } catch (error) {
+      setBlockError(error instanceof Error ? error.message : "Could not update block status.");
+    } finally {
+      setBlockSavingId("");
     }
   }
 
@@ -1193,6 +1262,143 @@ export default function InternalControlPage() {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {/* Daily Growth Overview */}
+        {activeTab === "overview" ? (
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-slate-800">Daily Growth — Today vs Yesterday</h2>
+            {dailyOverviewLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading daily overview…</p>
+            ) : dailyOverviewError ? (
+              <p className="mt-4 text-sm text-rose-600">{dailyOverviewError}</p>
+            ) : dailyOverview ? (
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {(["today", "yesterday"]).map((bucket) => (
+                  <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">
+                      {bucket === "today" ? "Today" : "Yesterday"}
+                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <MetricCard label="Bookings" value={dailyOverview[bucket].bookings} />
+                      <MetricCard label="Check-ins" value={dailyOverview[bucket].checkIns} />
+                      <MetricCard label="Cancellations" value={dailyOverview[bucket].cancellations} />
+                      <MetricCard label="Revenue (INR)" value={`₹${dailyOverview[bucket].revenue.toFixed(0)}`} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {/* Booking Block Override */}
+        {activeTab === "overview" ? (
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-slate-800">Owner Booking Block Override</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Manually override the auto-block for owners with excessive unpaid dues. All changes are audit-logged.
+            </p>
+            {blockError ? <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{blockError}</div> : null}
+            {blockNotice ? <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{blockNotice}</div> : null}
+            {blockOwnersLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading owners…</p>
+            ) : blockOwners.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500">No owners found.</p>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                      <th className="py-2 px-3 text-left">Owner</th>
+                      <th className="py-2 px-3 text-left">Phone</th>
+                      <th className="py-2 px-3 text-left">Pending Dues</th>
+                      <th className="py-2 px-3 text-left">Status</th>
+                      <th className="py-2 px-3 text-left">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {blockOwners.map((owner) => (
+                      <tr key={owner.id} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="py-2 px-3 font-medium text-slate-800">{owner.name || owner.id}</td>
+                        <td className="py-2 px-3 text-slate-600">{owner.phone}</td>
+                        <td className="py-2 px-3">
+                          {owner.pendingCommissionInr > 0 ? (
+                            <span className="font-semibold text-rose-600">₹{owner.pendingCommissionInr}</span>
+                          ) : "—"}
+                        </td>
+                        <td className="py-2 px-3">
+                          {owner.bookingBlockOverride ? (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">Override (Unblocked)</span>
+                          ) : owner.pendingCommissionInr > 500 ? (
+                            <span className="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">Auto-Blocked</span>
+                          ) : (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">Normal</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-3">
+                          <button
+                            type="button"
+                            disabled={blockSavingId === owner.id}
+                            onClick={() => void handleToggleBookingBlock(owner)}
+                            className={`rounded px-3 py-1 text-xs font-semibold ring-1 disabled:opacity-60 ${owner.bookingBlockOverride ? "text-slate-700 ring-slate-300 hover:bg-slate-100" : "text-amber-700 ring-amber-200 hover:bg-amber-50"}`}
+                          >
+                            {blockSavingId === owner.id ? "Saving…" : owner.bookingBlockOverride ? "Remove Override" : "Unblock Bookings"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {/* Role-Change History */}
+        {activeTab === "overview" ? (
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+            <h2 className="text-lg font-bold text-slate-800">Role-Change History</h2>
+            <p className="mt-1 text-sm text-slate-500">Last 50 user role changes (newest first).</p>
+            {roleChangesLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading…</p>
+            ) : roleChanges.length === 0 ? (
+              <p className="mt-4 text-sm text-slate-500">No role changes recorded yet.</p>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                      <th className="py-2 px-3 text-left">When</th>
+                      <th className="py-2 px-3 text-left">Target User</th>
+                      <th className="py-2 px-3 text-left">From</th>
+                      <th className="py-2 px-3 text-left">To</th>
+                      <th className="py-2 px-3 text-left">Actor</th>
+                      <th className="py-2 px-3 text-left">Source</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {roleChanges.map((entry) => (
+                      <tr key={entry.id} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="py-2 px-3 text-slate-500 whitespace-nowrap text-xs">
+                          {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+                        </td>
+                        <td className="py-2 px-3 font-mono text-xs text-slate-600">{entry.targetUserId}</td>
+                        <td className="py-2 px-3">
+                          <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-600">{entry.previousRole || "—"}</span>
+                        </td>
+                        <td className="py-2 px-3">
+                          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-semibold text-indigo-700">{entry.nextRole || "—"}</span>
+                        </td>
+                        <td className="py-2 px-3 font-mono text-xs text-slate-500">{entry.actorUserId}</td>
+                        <td className="py-2 px-3 text-slate-500 text-xs">{entry.source || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             )}
           </section>

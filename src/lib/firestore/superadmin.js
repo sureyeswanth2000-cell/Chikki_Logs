@@ -1,4 +1,4 @@
-import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
@@ -616,4 +616,102 @@ export async function setCityScarcityMode({ cityId, enabled }) {
     scarcityEnabled: Boolean(enabled),
     scarcityValue,
   };
+}
+
+// Daily growth overview: today vs yesterday bookings, check-ins, cancellations, revenue
+export async function getDailyGrowthOverview() {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const tMs = todayStart.getTime();
+  const yMs = yesterdayStart.getTime();
+
+  const [bookingsSnap, paymentsSnap] = await Promise.all([
+    getDocs(collection(db, COLLECTIONS.bookings)),
+    getDocs(collection(db, COLLECTIONS.payments)),
+  ]);
+
+  const metrics = {
+    today: { bookings: 0, checkIns: 0, cancellations: 0, revenue: 0 },
+    yesterday: { bookings: 0, checkIns: 0, cancellations: 0, revenue: 0 },
+  };
+
+  bookingsSnap.docs.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    const createdMs = typeof d.createdAt?.toMillis === "function" ? d.createdAt.toMillis() : 0;
+    const checkInMs = typeof d.checkInAt?.toMillis === "function" ? d.checkInAt.toMillis() : 0;
+    const cancelledMs = typeof d.cancelledAt?.toMillis === "function" ? d.cancelledAt.toMillis() : 0;
+
+    const bucket = createdMs >= tMs ? "today" : createdMs >= yMs ? "yesterday" : null;
+    if (bucket) metrics[bucket].bookings += 1;
+
+    if (checkInMs) {
+      const cBucket = checkInMs >= tMs ? "today" : checkInMs >= yMs ? "yesterday" : null;
+      if (cBucket) metrics[cBucket].checkIns += 1;
+    }
+    if (cancelledMs) {
+      const xBucket = cancelledMs >= tMs ? "today" : cancelledMs >= yMs ? "yesterday" : null;
+      if (xBucket) metrics[xBucket].cancellations += 1;
+    }
+  });
+
+  paymentsSnap.docs.forEach((docSnap) => {
+    const d = docSnap.data() || {};
+    const createdMs = typeof d.createdAt?.toMillis === "function" ? d.createdAt.toMillis() : 0;
+    const amount = Number(d.totalAmount ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    const bucket = createdMs >= tMs ? "today" : createdMs >= yMs ? "yesterday" : null;
+    if (bucket) metrics[bucket].revenue += amount;
+  });
+
+  return metrics;
+}
+
+// Role-change audit log
+export async function getRoleChangeHistory(limitCount = 50) {
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTIONS.auditLogs),
+      where("action", "==", "user_role_changed"),
+      orderBy("createdAt", "desc"),
+      limit(limitCount)
+    )
+  );
+  return snap.docs.map((docSnap) => {
+    const d = docSnap.data() || {};
+    const createdAt = typeof d.createdAt?.toDate === "function" ? d.createdAt.toDate().toISOString() : "";
+    return {
+      id: docSnap.id,
+      actorUserId: String(d.actorUserId ?? ""),
+      actorRole: String(d.actorRole ?? ""),
+      targetUserId: String(d.entityId ?? d.targetUserId ?? ""),
+      previousRole: String(d.metadata?.previousRole ?? d.metadata?.prevRole ?? ""),
+      nextRole: String(d.metadata?.nextRole ?? ""),
+      source: String(d.metadata?.source ?? ""),
+      createdAt,
+    };
+  });
+}
+
+// Booking block override for an owner (calls Cloud Function)
+export async function setOwnerBookingBlockOverride(ownerId, unblock, reason = "") {
+  const { setOwnerBookingBlock } = await import("@/lib/cloud/security");
+  return setOwnerBookingBlock({ ownerId, unblock, reason });
+}
+
+// Fetch owners with their bookingBlockOverride status
+export async function getOwnersWithBlockStatus() {
+  const snap = await getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "owner")));
+  return snap.docs.map((docSnap) => {
+    const d = docSnap.data() || {};
+    return {
+      id: docSnap.id,
+      name: String(d.name ?? ""),
+      phone: String(d.phone ?? ""),
+      pendingCommissionInr: Number(d.pendingCommissionInr ?? 0),
+      bookingBlockOverride: Boolean(d.bookingBlockOverride),
+    };
+  }).sort((a, b) => a.name.localeCompare(b.name));
 }

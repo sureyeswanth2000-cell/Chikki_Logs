@@ -15,12 +15,15 @@ import {
   getOwnerApplications,
   getOwnerCommissionDuesForOperator,
   getOwnersForCommissionManagement,
+  getOwnersWithBlockStatus,
   getPlatformSettings,
+  getRoleChangeHistory,
   runCommissionDuesManual,
   saveOwnerCommissionOverride,
   savePlatformDefaultCommission,
   searchUserByPhone,
   setCityScarcityMode,
+  setOwnerBookingBlockOverride,
   updateCity,
   updateManagedUserRole,
   updatePlatformSettings,
@@ -87,6 +90,17 @@ export default function OperatorPage() {
   const [operatorNotices, setOperatorNotices] = useState([]);
   const [noticeActionLoadingId, setNoticeActionLoadingId] = useState("");
   const [runDuesNowLoading, setRunDuesNowLoading] = useState(false);
+
+  // Booking block override
+  const [blockOwners, setBlockOwners] = useState([]);
+  const [blockOwnersLoading, setBlockOwnersLoading] = useState(false);
+  const [blockOwnersError, setBlockOwnersError] = useState(null);
+  const [blockOwnersNotice, setBlockOwnersNotice] = useState(null);
+  const [blockSavingId, setBlockSavingId] = useState("");
+
+  // Role-change history
+  const [roleChanges, setRoleChanges] = useState([]);
+  const [roleChangesLoading, setRoleChangesLoading] = useState(false);
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true);
@@ -180,6 +194,31 @@ export default function OperatorPage() {
     }
   }, []);
 
+  const loadBlockOwners = useCallback(async () => {
+    setBlockOwnersLoading(true);
+    setBlockOwnersError(null);
+    try {
+      const rows = await getOwnersWithBlockStatus();
+      setBlockOwners(rows);
+    } catch {
+      setBlockOwnersError("Could not load owner block status.");
+    } finally {
+      setBlockOwnersLoading(false);
+    }
+  }, []);
+
+  const loadRoleChanges = useCallback(async () => {
+    setRoleChangesLoading(true);
+    try {
+      const rows = await getRoleChangeHistory(30);
+      setRoleChanges(rows);
+    } catch {
+      setRoleChanges([]);
+    } finally {
+      setRoleChangesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadMetrics();
     void loadApplications();
@@ -188,7 +227,9 @@ export default function OperatorPage() {
     void loadOwnerDues();
     void loadOperatorNotices();
     void loadOwnersList();
-  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices, loadOwnersList]);
+    void loadBlockOwners();
+    void loadRoleChanges();
+  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices, loadOwnersList, loadBlockOwners, loadRoleChanges]);
 
   async function handleSaveCommission(event) {
     event.preventDefault();
@@ -268,6 +309,31 @@ export default function OperatorPage() {
       setDueError(error instanceof Error ? error.message : "Could not run due creation.");
     } finally {
       setRunDuesNowLoading(false);
+    }
+  }
+
+  async function handleToggleBookingBlock(owner) {
+    const nextUnblock = !owner.bookingBlockOverride;
+    const reason = nextUnblock
+      ? `Manually unblocked by operator`
+      : `Block override removed by operator`;
+    setBlockSavingId(owner.id);
+    setBlockOwnersError(null);
+    setBlockOwnersNotice(null);
+    try {
+      await setOwnerBookingBlockOverride(owner.id, nextUnblock, reason);
+      setBlockOwners((prev) =>
+        prev.map((o) => o.id === owner.id ? { ...o, bookingBlockOverride: nextUnblock } : o)
+      );
+      setBlockOwnersNotice(
+        nextUnblock
+          ? `Bookings unblocked for ${owner.name} — dues check bypassed.`
+          : `Block override removed for ${owner.name} — dues check re-enabled.`
+      );
+    } catch (error) {
+      setBlockOwnersError(error instanceof Error ? error.message : "Could not update block status.");
+    } finally {
+      setBlockSavingId("");
     }
   }
 
@@ -1137,6 +1203,136 @@ export default function OperatorPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </section>
+
+        {/* Booking Block Override */}
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-slate-800">Owner Booking Block Override</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            When an owner has excessive unpaid dues the system auto-blocks new bookings. You can manually
+            override the block here. All changes are audit-logged.
+          </p>
+          {blockOwnersError ? (
+            <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{blockOwnersError}</div>
+          ) : null}
+          {blockOwnersNotice ? (
+            <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{blockOwnersNotice}</div>
+          ) : null}
+          {blockOwnersLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading owners…</p>
+          ) : blockOwners.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">No owners found.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                    <th className="py-2 px-3 text-left">Owner</th>
+                    <th className="py-2 px-3 text-left">Phone</th>
+                    <th className="py-2 px-3 text-left">Pending Dues (INR)</th>
+                    <th className="py-2 px-3 text-left">Block Status</th>
+                    <th className="py-2 px-3 text-left">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {blockOwners.map((owner) => (
+                    <tr key={owner.id} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="py-2 px-3 font-medium text-slate-800">{owner.name || owner.id}</td>
+                      <td className="py-2 px-3 text-slate-600">{owner.phone}</td>
+                      <td className="py-2 px-3 text-slate-600">
+                        {owner.pendingCommissionInr > 0 ? (
+                          <span className="font-semibold text-rose-600">INR {owner.pendingCommissionInr}</span>
+                        ) : (
+                          <span className="text-slate-400">—</span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        {owner.bookingBlockOverride ? (
+                          <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                            Override Active (Unblocked)
+                          </span>
+                        ) : owner.pendingCommissionInr > 500 ? (
+                          <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700">
+                            Auto-Blocked
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">
+                            Normal
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-3">
+                        <button
+                          type="button"
+                          disabled={blockSavingId === owner.id}
+                          onClick={() => void handleToggleBookingBlock(owner)}
+                          className={`rounded px-3 py-1 text-xs font-semibold ring-1 disabled:opacity-60 ${
+                            owner.bookingBlockOverride
+                              ? "text-slate-700 ring-slate-300 hover:bg-slate-100"
+                              : "text-amber-700 ring-amber-200 hover:bg-amber-50"
+                          }`}
+                        >
+                          {blockSavingId === owner.id
+                            ? "Saving…"
+                            : owner.bookingBlockOverride
+                              ? "Remove Override"
+                              : "Unblock Bookings"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        {/* Role-Change History */}
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-bold text-slate-800">Role-Change History</h2>
+          <p className="mt-1 text-sm text-slate-500">Last 30 user role changes (newest first).</p>
+          {roleChangesLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading…</p>
+          ) : roleChanges.length === 0 ? (
+            <p className="mt-4 text-sm text-slate-500">No role changes on record.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 text-xs uppercase tracking-wide text-slate-400">
+                    <th className="py-2 px-3 text-left">When</th>
+                    <th className="py-2 px-3 text-left">Target User ID</th>
+                    <th className="py-2 px-3 text-left">From</th>
+                    <th className="py-2 px-3 text-left">To</th>
+                    <th className="py-2 px-3 text-left">Actor</th>
+                    <th className="py-2 px-3 text-left">Source</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roleChanges.map((entry) => (
+                    <tr key={entry.id} className="border-b border-slate-50 hover:bg-slate-50">
+                      <td className="py-2 px-3 text-slate-500 whitespace-nowrap">
+                        {entry.createdAt ? new Date(entry.createdAt).toLocaleString() : "—"}
+                      </td>
+                      <td className="py-2 px-3 font-mono text-xs text-slate-600">{entry.targetUserId}</td>
+                      <td className="py-2 px-3">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-xs font-semibold text-slate-600">
+                          {entry.previousRole || "—"}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3">
+                        <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-xs font-semibold text-indigo-700">
+                          {entry.nextRole || "—"}
+                        </span>
+                      </td>
+                      <td className="py-2 px-3 font-mono text-xs text-slate-500">{entry.actorUserId}</td>
+                      <td className="py-2 px-3 text-slate-500">{entry.source || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
