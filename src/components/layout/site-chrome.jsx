@@ -13,6 +13,11 @@ const basePrimaryNav = [
   { href: "/apply-owner", label: "Apply as Owner" },
 ];
 
+const guestPrimaryNav = [
+  { href: "/", label: "Home" },
+  { href: "/support", label: "Support" },
+];
+
 const ownerPrimaryNav = [
   { href: "/", label: "Home" },
   { href: "/owner", label: "Dashboard" },
@@ -24,6 +29,12 @@ const ownerPrimaryNav = [
 const operatorPrimaryNav = [
   { href: "/operator", label: "Operator Console" },
   { href: "/history", label: "Service History" },
+  { href: "/support", label: "Support" },
+];
+
+const superadminPrimaryNav = [
+  { href: "/superadmin", label: "Superadmin" },
+  { href: "/internal-control", label: "Internal Control" },
   { href: "/support", label: "Support" },
 ];
 
@@ -43,16 +54,20 @@ export function SiteChrome({ children }) {
   });
   const { user, profile } = useAuth();
 
-  const primaryNav =
-    profile?.role === "owner"
-      ? ownerPrimaryNav
-      : profile?.role === "operator"
-      ? operatorPrimaryNav
-      : basePrimaryNav;
+  const primaryNav = !user
+    ? guestPrimaryNav
+    : profile?.role === "owner"
+    ? ownerPrimaryNav
+    : profile?.role === "operator"
+    ? operatorPrimaryNav
+    : profile?.role === "superadmin"
+    ? superadminPrimaryNav
+    : basePrimaryNav;
 
   const profileLabel = profile?.name || user?.phoneNumber || "Profile";
   const profileHref = user ? "/profile" : "/login";
   const isOwner = profile?.role === "owner";
+  const isConsumer = user && profile?.role === "consumer";
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -216,7 +231,7 @@ export function SiteChrome({ children }) {
                   </div>
                 )}
 
-                {!isOwner ? (
+                {isConsumer ? (
                   <div className="mt-2 border-t border-slate-100 pt-2">
                     <Link
                       href="/apply-owner"

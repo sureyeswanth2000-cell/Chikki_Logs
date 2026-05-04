@@ -1851,6 +1851,26 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
 
   const ownerSnap = ownerId ? await db.collection("users").doc(ownerId).get() : null;
   const ownerData = ownerSnap && ownerSnap.exists ? (ownerSnap.data() || {}) : {};
+
+  // Auto-block: check unpaid commission dues for this property's owner
+  if (ownerId) {
+    const pendingDuesSnap = await db.collection("owner_commission_dues")
+      .where("ownerId", "==", ownerId)
+      .where("status", "==", "pending")
+      .get();
+    const pendingDueCount = pendingDuesSnap.size;
+    const pendingDueTotal = pendingDuesSnap.docs.reduce(
+      (sum, d) => sum + Number(d.data().commissionAmountInr ?? 0),
+      0
+    );
+    if (pendingDueCount >= 10 || pendingDueTotal > 500) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This property is temporarily unavailable for new bookings. Please try another property."
+      );
+    }
+  }
+
   const platformSettings = await readPlatformSettings();
   const platformFeeInr = clampPlatformBookingFeeInr(platformSettings.platformFeeInr);
   const pricingConfig = pricingConfigForOwner(ownerData, platformSettings.platformCommissionPercent);

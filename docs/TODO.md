@@ -85,7 +85,7 @@
 - [ ] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
 - [ ] Add missing modify-booking option for existing bookings so consumers can change booking timing/details after creation when allowed by booking rules
 - [ ] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
-- [ ] Booking history should show how much the consumer paid / final amount due for each booking
+- [x] Booking history should show how much the consumer paid / final amount due for each booking
 - [ ] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
 - [ ] Improve post-login return into the exact booking state, not only the consumer search context
 - [ ] Verify owner-side visibility immediately after consumer booking across all booking states
@@ -94,9 +94,9 @@
 ## Pricing & Revenue Model
 - [x] Replace hardcoded commission defaults with configurable platform commission defaults (start at 5%) controlled by operator/superadmin
 - [x] Allow operator/superadmin to set per-owner commission overrides (can be below or above platform default) and use that override as the effective owner commission
-- [ ] Show consumers bed price only in listings/selection views; do not expose internal owner commission settlement details
+- [x] Show consumers bed price only in listings/selection views; do not expose internal owner commission settlement details
 - [x] Add fixed platform fee (default INR 9) at booking/checkout calculation time and allow superadmin to edit this fee from UI/platform settings
-- [ ] Show platform fee as a separate line item in booking/checkout summary for consumers (bed price + platform fee = final total)
+- [x] Show platform fee as a separate line item in booking/checkout summary for consumers (bed price + platform fee = final total)
 - [x] Apply platform fee per booking (not per bed)
 - [x] Do not charge platform fee on cancelled/no-charge bookings
 - [x] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
@@ -129,7 +129,7 @@
 - [x] Add in-app owner settlement flow for paying pending platform dues; notify operator when owner marks a due payment complete
 - [x] Add operator action to run commission due creation on-demand in addition to nightly schedule
 - [x] Add owner dashboard quick card for pending platform dues summary
-- [ ] Auto-block new consumer bookings for an owner/property when unpaid commission instances >= 10 OR pending commission due exceeds INR 500
+- [x] Auto-block new consumer bookings for an owner/property when unpaid commission instances >= 10 OR pending commission due exceeds INR 500
 - [ ] Auto-unblock booking after due settlement is confirmed, and provide operator manual unblock control with audit trail
 - [ ] Owners with high platform commission % (e.g., ≥ 25%) should receive special platform privileges or dedicated support — define privilege tiers, what benefits each tier grants, and implement in-app indicators and backend enforcement
 - [ ] Deploy Razorpay keys/secrets in Firebase Functions environment and run live-sandbox end-to-end checkout + webhook verification on production URL
@@ -140,7 +140,7 @@
 - [ ] Add stronger trust cues around verified listings, payment safety, and support
 
 ## UX / UI
-- [ ] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
+- [x] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
 - [x] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
 - [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [x] Add dark and light mode toggle for the app shell
@@ -180,7 +180,7 @@
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access
 - [x] Prevent duplicate cities — reject add/save if a city with the same name + state combination already exists
 - [x] Remove the Status field from the Add City form — new cities should default to Active without user input
-- [ ] Replace the Delete button on each city row with a Disable / Mark Inactive action — cities should never be hard-deleted
+- [x] Replace the Delete button on each city row with a Disable / Mark Inactive action — cities should never be hard-deleted
 - [x] Script or one-time admin tool to remove existing duplicate city records (e.g., two "kavali, andhrapradesh" entries) — `scripts/cleanup-duplicate-cities.mjs`
 
 ## Internal Roles
