@@ -1,7 +1,7 @@
 import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, updateDoc, where, } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
-import { allowOwnerDemandPricing, stopOwnerDemandPricing } from "@/lib/cloud/security";
+import { allowOwnerDemandPricing, markCommissionDuePaid as markCommissionDuePaidCallable, stopOwnerDemandPricing } from "@/lib/cloud/security";
 
 function toMillisFromDateTime(value) {
     if (!value)
@@ -866,4 +866,114 @@ export async function getOwnerCheckoutAlerts(ownerId) {
     ).sort((a, b) => (toMillisFromDateTime(b.checkOutAt) ?? 0) - (toMillisFromDateTime(a.checkOutAt) ?? 0));
 
     return alertBookings.slice(0, 20);
+}
+
+export async function getOwnerProfile(ownerId) {
+    if (!ownerId) return null;
+    const snap = await getDoc(doc(db, COLLECTIONS.users, ownerId));
+    if (!snap.exists()) return null;
+    const data = snap.data() || {};
+    return {
+        ownerRevenueSharePercent: typeof data.ownerRevenueSharePercent === "number"
+            ? data.ownerRevenueSharePercent
+            : null,
+    };
+}
+
+export async function getOwnerNotices(ownerId) {
+    if (!ownerId) return [];
+    const snap = await getDocs(
+        query(
+            collection(db, COLLECTIONS.ownerNotices),
+            where("ownerId", "==", ownerId),
+            where("dismissed", "==", false)
+        )
+    );
+    return snap.docs.map((item) => {
+        const data = item.data();
+        return {
+            id: item.id,
+            type: String(data.type ?? ""),
+            title: String(data.title ?? ""),
+            message: String(data.message ?? ""),
+            oldCommission: Number(data.oldCommission ?? 0),
+            newCommission: Number(data.newCommission ?? 0),
+        };
+    });
+}
+
+export async function dismissOwnerNotice(noticeId) {
+
+    export async function getOwnerCommissionDues(ownerId) {
+        if (!ownerId) return [];
+        const snap = await getDocs(
+            query(
+                collection(db, COLLECTIONS.ownerCommissionDues),
+                where("ownerId", "==", ownerId),
+                where("status", "in", ["pending", "claimed"])
+            )
+        );
+        return snap.docs.map((item) => {
+            const data = item.data();
+            return {
+                id: item.id,
+                bookingId: String(data.bookingId ?? ""),
+                commissionPercent: Number(data.commissionPercent ?? 0),
+                commissionAmountInr: Number(data.commissionAmountInr ?? 0),
+                bedAmount: Number(data.bedAmount ?? 0),
+                status: String(data.status ?? "pending"),
+                bookingCompletedAt: String(data.bookingCompletedAt ?? ""),
+            };
+        });
+    }
+
+    export async function markOwnerDueAsPaid(dueId) {
+        if (!dueId) throw new Error("dueId is required.");
+        await markCommissionDuePaidCallable(dueId);
+    }
+
+    export async function getOwnerDuesSummary(ownerId) {
+        if (!ownerId) {
+            return {
+                pendingCommissionInr: 0,
+                pendingDueCount: 0,
+                claimedDueCount: 0,
+            };
+        }
+
+        const [ownerSnap, duesSnap] = await Promise.all([
+            getDoc(doc(db, COLLECTIONS.users, ownerId)),
+            getDocs(
+                query(
+                    collection(db, COLLECTIONS.ownerCommissionDues),
+                    where("ownerId", "==", ownerId),
+                    where("status", "in", ["pending", "claimed"])
+                )
+            ),
+        ]);
+
+        const ownerData = ownerSnap.exists() ? ownerSnap.data() || {} : {};
+        let pendingDueCount = 0;
+        let claimedDueCount = 0;
+        duesSnap.docs.forEach((item) => {
+            const data = item.data() || {};
+            const status = String(data.status ?? "pending").toLowerCase();
+            if (status === "claimed") {
+                claimedDueCount += 1;
+            } else {
+                pendingDueCount += 1;
+            }
+        });
+
+        return {
+            pendingCommissionInr: Number(ownerData.pendingCommissionInr ?? 0),
+            pendingDueCount,
+            claimedDueCount,
+        };
+    }
+    if (!noticeId) return;
+    await updateDoc(doc(db, COLLECTIONS.ownerNotices, noticeId), {
+        dismissed: true,
+        dismissedAt: serverTimestamp(),
+    });
 }

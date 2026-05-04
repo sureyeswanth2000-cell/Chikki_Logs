@@ -176,6 +176,29 @@ service cloud.firestore {
       allow write: if isSuperadmin();
     }
 
+    match /owner_notices/{noticeId} {
+      allow read: if isInternalOperator() ||
+        (isOwner() && resource.data.ownerId == request.auth.uid);
+      allow update: if isOwner() && resource.data.ownerId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dismissed', 'dismissedAt', 'updatedAt']) &&
+        request.resource.data.dismissed == true;
+      allow create, delete: if false;
+    }
+
+    match /operator_notices/{noticeId} {
+      allow read: if isInternalOperator();
+      allow update: if isInternalOperator() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['dismissed', 'dismissedAt', 'updatedAt']) &&
+        request.resource.data.dismissed == true;
+      allow create, delete: if false;
+    }
+
+    match /owner_commission_dues/{dueId} {
+      allow read: if isInternalOperator() ||
+        (isOwner() && resource.data.ownerId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
     match /audit_logs/{auditId} {
       allow create: if isSignedIn();
       allow read: if isInternalOperator();

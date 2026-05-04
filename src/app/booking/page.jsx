@@ -56,11 +56,8 @@ function priceForBed(duration, bed) {
     };
     const acExtra = String(bed?.bedType ?? "").toUpperCase() === "AC" ? 50 : 0;
     const basePrice = (prices[duration] ?? prices.hourly) + acExtra;
-    const ownerRevenueSharePercent = Math.max(0, Math.min(100, Number(bed?.ownerRevenueSharePercent ?? 10)));
-    const gatewayFeePercent = Math.max(0, Math.min(100, Number(bed?.gatewayFeePercent ?? 2)));
-    const platformRevenue = Math.round(basePrice * (ownerRevenueSharePercent / 100));
-    const gatewayFee = Math.round(basePrice * (gatewayFeePercent / 100));
-    return basePrice + platformRevenue + gatewayFee;
+    const demandMultiplierPercent = Math.max(0, Number(bed?.demandMultiplierPercent ?? 0));
+    return Math.round(basePrice * (1 + demandMultiplierPercent / 100));
 }
 
 function maskAadhaar(value) {
@@ -125,6 +122,19 @@ function BookingContent() {
         () => listing?.bedOptions?.find((bed) => bed.bedId === selectedBedId) ?? null,
         [listing?.bedOptions, selectedBedId]
     );
+    const selectedBedPrice = useMemo(() => priceForBed(duration, selectedBed), [duration, selectedBed]);
+    const platformFeeInr = useMemo(() => {
+        const fromBed = Number(selectedBed?.platformFeeInr);
+        if (Number.isFinite(fromBed)) {
+            return Math.max(0, Math.min(999, Math.round(fromBed)));
+        }
+        const fromListing = Number(listing?.platformFeeInr);
+        if (Number.isFinite(fromListing)) {
+            return Math.max(0, Math.min(999, Math.round(fromListing)));
+        }
+        return 9;
+    }, [listing?.platformFeeInr, selectedBed?.platformFeeInr]);
+    const bookingTotal = selectedBedPrice + platformFeeInr;
     const hasSavedAadhaarRef = Boolean(profile?.aadhaarRefId && profile?.aadhaarLast4);
     const aadhaarRequiredForBooking = bookingCount >= 1 && !hasSavedAadhaarRef;
     const aadhaarAlreadyOnFileForBooking = bookingCount >= 1 && hasSavedAadhaarRef;
@@ -379,10 +389,12 @@ function BookingContent() {
                                             <div><dt className="text-xs font-semibold text-slate-500">Bed</dt><dd>{selectedBed?.bedCode} ({selectedBed?.bedType})</dd></div>
                                             <div><dt className="text-xs font-semibold text-slate-500">Start</dt><dd>{checkInAt}</dd></div>
                                             <div><dt className="text-xs font-semibold text-slate-500">Stay Type</dt><dd>{prettyDuration(duration)}</dd></div>
-                                            <div><dt className="text-xs font-semibold text-slate-500">All-inclusive rate</dt><dd>INR {priceForBed(duration, selectedBed)}</dd></div>
+                                            <div><dt className="text-xs font-semibold text-slate-500">Bed price</dt><dd>INR {selectedBedPrice}</dd></div>
+                                            <div><dt className="text-xs font-semibold text-slate-500">Platform fee</dt><dd>INR {platformFeeInr}</dd></div>
+                                            <div><dt className="text-xs font-semibold text-slate-500">Booking total</dt><dd className="font-semibold">INR {bookingTotal}</dd></div>
                                         </dl>
                                         {selectedBed?.demandActive ? (
-                                            <p className="mt-3 text-xs font-semibold text-amber-700">High Demand is included in this all-inclusive rate.</p>
+                                            <p className="mt-3 text-xs font-semibold text-amber-700">High Demand is included in the bed price shown above.</p>
                                         ) : selectedBed?.demandWarningActive ? (
                                             <p className="mt-3 text-xs font-semibold text-amber-700">Demand is rising for this area.</p>
                                         ) : null}

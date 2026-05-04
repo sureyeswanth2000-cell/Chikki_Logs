@@ -3,10 +3,13 @@ import { getAuth } from "firebase/auth";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
 import {
+  confirmCommissionDueSettlement,
   revealAadhaarBreakGlass,
+  runCommissionDuesNow,
   setDemandScopeOverride,
   setUserRole,
   updateDemandPricingSettings,
+  updatePlatformDefaultCommission,
 } from "@/lib/cloud/security";
 
 export const DEFAULT_DEMAND_SETTINGS = {
@@ -432,24 +435,129 @@ export async function rejectOwnerApplication(applicationId) {
 const PLATFORM_SETTINGS_CITY_DOC = "_platform_cfg";
 const SCARCITY_MIN = 1;
 const SCARCITY_MAX = 5;
+const DEFAULT_PLATFORM_FEE_INR = 9;
+const DEFAULT_PLATFORM_COMMISSION_PERCENT = 5;
 
 export async function getPlatformSettings() {
-  const snap = await getDoc(doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC));
-  const data = snap.exists() ? snap.data() : {};
+  const [legacySnap, mainSnap] = await Promise.all([
+    getDoc(doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC)),
+    getDoc(doc(db, COLLECTIONS.platformSettings, "main")),
+  ]);
+  const legacy = legacySnap.exists() ? legacySnap.data() : {};
+  const main = mainSnap.exists() ? mainSnap.data() : {};
   return {
-    checkInGraceMinutes: Number(data.checkInGraceMinutes ?? 15),
+    checkInGraceMinutes: Number(main.checkInGraceMinutes ?? legacy.checkInGraceMinutes ?? 15),
+    platformFeeInr: Math.max(0, Number(main.platformFeeInr ?? legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR) || DEFAULT_PLATFORM_FEE_INR),
+    platformCommissionPercent: Math.max(0, Math.min(100, Number(main.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT))),
   };
 }
 
-export async function updatePlatformSettings({ checkInGraceMinutes }) {
+export async function savePlatformDefaultCommission(platformCommissionPercent) {
+  const result = await updatePlatformDefaultCommission({ platformCommissionPercent });
+  return {
+    platformCommissionPercent: result?.platformCommissionPercent ?? platformCommissionPercent,
+    affectedOwnerCount: result?.affectedOwnerCount ?? 0,
+  };
+}
+
+export async function getOwnerCommissionDuesForOperator() {
+  const [duesSnap, usersSnap] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.ownerCommissionDues), where("status", "in", ["pending", "claimed"]))),
+    getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "owner"))),
+  ]);
+
+  const ownerById = new Map();
+  usersSnap.docs.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    ownerById.set(docSnap.id, {
+      ownerId: docSnap.id,
+      name: String(data.name ?? ""),
+      phone: String(data.phone ?? ""),
+      pendingCommissionInr: Number(data.pendingCommissionInr ?? 0),
+    });
+  });
+
+  return duesSnap.docs.map((docSnap) => {
+    const data = docSnap.data() || {};
+    const ownerId = String(data.ownerId ?? "");
+    const owner = ownerById.get(ownerId) || {};
+    return {
+      id: docSnap.id,
+      ownerId,
+      ownerName: String(owner.name ?? ""),
+      ownerPhone: String(owner.phone ?? ""),
+      bookingId: String(data.bookingId ?? ""),
+      commissionAmountInr: Number(data.commissionAmountInr ?? 0),
+      commissionPercent: Number(data.commissionPercent ?? 0),
+      bedAmount: Number(data.bedAmount ?? 0),
+      status: String(data.status ?? "pending"),
+      bookingCompletedAt: String(data.bookingCompletedAt ?? ""),
+      ownerPendingCommissionInr: Number(owner.pendingCommissionInr ?? 0),
+    };
+  });
+}
+
+export async function confirmOwnerCommissionDueSettlement(dueId) {
+  if (!dueId) throw new Error("dueId is required.");
+  await confirmCommissionDueSettlement(dueId);
+}
+
+export async function runCommissionDuesManual() {
+  const result = await runCommissionDuesNow();
+  return {
+    created: Number(result?.created ?? 0),
+    ranAt: String(result?.ranAt ?? ""),
+  };
+}
+
+export async function getOperatorNotices() {
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTIONS.operatorNotices),
+      where("dismissed", "==", false)
+    )
+  );
+  return snap.docs.map((item) => {
+    const data = item.data() || {};
+    return {
+      id: item.id,
+      type: String(data.type ?? ""),
+      title: String(data.title ?? ""),
+      message: String(data.message ?? ""),
+      ownerId: String(data.ownerId ?? ""),
+      dueId: String(data.dueId ?? ""),
+      bookingId: String(data.bookingId ?? ""),
+      commissionAmountInr: Number(data.commissionAmountInr ?? 0),
+    };
+  });
+}
+
+export async function dismissOperatorNotice(noticeId) {
+  if (!noticeId) return;
+  await updateDoc(doc(db, COLLECTIONS.operatorNotices, noticeId), {
+    dismissed: true,
+    dismissedAt: serverTimestamp(),
+  });
+}
+
+export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr }) {
   const clamped = Math.min(120, Math.max(5, Number(checkInGraceMinutes) || 15));
+  const nextPlatformFee = Math.min(999, Math.max(0, Number(platformFeeInr) || DEFAULT_PLATFORM_FEE_INR));
   await setDoc(
     doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC),
-    { _type: "platform_settings", checkInGraceMinutes: clamped, updatedAt: serverTimestamp() },
+    {
+      _type: "platform_settings",
+      checkInGraceMinutes: clamped,
+      platformFeeInr: nextPlatformFee,
+      updatedAt: serverTimestamp(),
+    },
     { merge: true }
   );
-  await writeAuditLog("platform_settings_updated", "platform_settings", PLATFORM_SETTINGS_CITY_DOC, { checkInGraceMinutes: clamped });
-  return { checkInGraceMinutes: clamped };
+  await writeAuditLog("platform_settings_updated", "platform_settings", PLATFORM_SETTINGS_CITY_DOC, {
+    checkInGraceMinutes: clamped,
+    platformFeeInr: nextPlatformFee,
+  });
+  return { checkInGraceMinutes: clamped, platformFeeInr: nextPlatformFee };
 }
 
 export async function setCityScarcityMode({ cityId, enabled }) {

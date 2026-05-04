@@ -208,13 +208,14 @@ export default function HistoryPage() {
                       <th className="px-3 py-2 font-semibold">Check-Out</th>
                       <th className="px-3 py-2 font-semibold">Status</th>
                       <th className="px-3 py-2 font-semibold">City</th>
+                      {!isOwnerHistory && <th className="px-3 py-2 font-semibold">Amount Paid</th>}
                       <th className="px-3 py-2 font-semibold">Rating</th>
                     </tr>
                   </thead>
                   <tbody>
                     {result.bookings.length === 0 && (
                       <tr>
-                        <td colSpan={isOwnerHistory ? 9 : 8} className="px-3 py-4 text-center text-slate-500">
+                        <td colSpan={isOwnerHistory ? 9 : 9} className="px-3 py-4 text-center text-slate-500">
                           No booking details found.
                         </td>
                       </tr>
@@ -240,6 +241,25 @@ export default function HistoryPage() {
                         <td className="px-3 py-2 text-slate-700">{item.checkOutAt || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.bookingStatus || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.cityName || "-"}</td>
+                        {!isOwnerHistory && (
+                          <td className="px-3 py-2 text-slate-700">
+                            {item.totalAmount != null ? (
+                              <div className="text-xs">
+                                {item.bedAmount != null && item.platformFeeAmount != null ? (
+                                  <>
+                                    <p className="text-slate-500">Bed: ₹{item.bedAmount}</p>
+                                    <p className="text-slate-500">Fee: ₹{item.platformFeeAmount}</p>
+                                    <p className="font-semibold text-slate-800">Total: ₹{item.totalAmount}</p>
+                                  </>
+                                ) : (
+                                  <p className="font-semibold text-slate-800">₹{item.totalAmount}</p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                        )}
                         <td className="px-3 py-2 text-slate-700">
                           {Number(item.ratingOverall ?? 0) > 0 ? (
                             <div>

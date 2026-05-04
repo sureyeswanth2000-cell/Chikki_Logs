@@ -7,10 +7,15 @@ import { useAuth } from "@/context/auth-context";
 import {
   addCity,
   approveOwnerApplication,
+  confirmOwnerCommissionDueSettlement,
+  dismissOperatorNotice,
   getCitiesWithOwners,
   getDashboardMetrics,
+  getOperatorNotices,
   getOwnerApplications,
+  getOwnerCommissionDuesForOperator,
   getPlatformSettings,
+  runCommissionDuesManual,
   searchUserByPhone,
   setCityScarcityMode,
   updateCity,
@@ -56,10 +61,19 @@ export default function OperatorPage() {
   const [cityFormError, setCityFormError] = useState(null);
   const [savingCity, setSavingCity] = useState(false);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
+  const [platformFeeInr, setPlatformFeeInr] = useState(9);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
   const [settingsNotice, setSettingsNotice] = useState(null);
+  const [dueRows, setDueRows] = useState([]);
+  const [dueLoading, setDueLoading] = useState(false);
+  const [dueNotice, setDueNotice] = useState(null);
+  const [dueError, setDueError] = useState(null);
+  const [confirmDueLoadingId, setConfirmDueLoadingId] = useState("");
+  const [operatorNotices, setOperatorNotices] = useState([]);
+  const [noticeActionLoadingId, setNoticeActionLoadingId] = useState("");
+  const [runDuesNowLoading, setRunDuesNowLoading] = useState(false);
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true);
@@ -105,10 +119,33 @@ export default function OperatorPage() {
     try {
       const settings = await getPlatformSettings();
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
+      setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
     } catch {
       // default remains 15 — do not block the UI
     } finally {
       setSettingsLoading(false);
+    }
+  }, []);
+
+  const loadOwnerDues = useCallback(async () => {
+    setDueLoading(true);
+    setDueError(null);
+    try {
+      const rows = await getOwnerCommissionDuesForOperator();
+      setDueRows(rows);
+    } catch {
+      setDueError("Could not load owner commission dues.");
+    } finally {
+      setDueLoading(false);
+    }
+  }, []);
+
+  const loadOperatorNotices = useCallback(async () => {
+    try {
+      const rows = await getOperatorNotices();
+      setOperatorNotices(rows);
+    } catch {
+      setOperatorNotices([]);
     }
   }, []);
 
@@ -117,7 +154,52 @@ export default function OperatorPage() {
     void loadApplications();
     void loadCities();
     void loadSettings();
-  }, [loadApplications, loadCities, loadMetrics, loadSettings]);
+    void loadOwnerDues();
+    void loadOperatorNotices();
+  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices]);
+
+  async function handleConfirmDue(dueId) {
+    if (!dueId) return;
+    setConfirmDueLoadingId(dueId);
+    setDueError(null);
+    setDueNotice(null);
+    try {
+      await confirmOwnerCommissionDueSettlement(dueId);
+      setDueRows((prev) => prev.filter((item) => item.id !== dueId));
+      setDueNotice("Commission due settlement confirmed.");
+    } catch (error) {
+      setDueError(error instanceof Error ? error.message : "Could not confirm settlement.");
+    } finally {
+      setConfirmDueLoadingId("");
+    }
+  }
+
+  async function handleDismissOperatorNotice(noticeId) {
+    if (!noticeId) return;
+    setNoticeActionLoadingId(noticeId);
+    try {
+      await dismissOperatorNotice(noticeId);
+      setOperatorNotices((prev) => prev.filter((item) => item.id !== noticeId));
+    } finally {
+      setNoticeActionLoadingId("");
+    }
+  }
+
+  async function handleRunDuesNow() {
+    setRunDuesNowLoading(true);
+    setDueError(null);
+    setDueNotice(null);
+    try {
+      const result = await runCommissionDuesManual();
+      setDueNotice(`Manual due run completed. New dues created: ${result.created}.`);
+      await loadOwnerDues();
+      await loadOperatorNotices();
+    } catch (error) {
+      setDueError(error instanceof Error ? error.message : "Could not run due creation.");
+    } finally {
+      setRunDuesNowLoading(false);
+    }
+  }
 
   async function handleSaveSettings(event) {
     event.preventDefault();
@@ -125,8 +207,9 @@ export default function OperatorPage() {
     setSettingsError(null);
     setSettingsNotice(null);
     try {
-      const next = await updatePlatformSettings({ checkInGraceMinutes });
+      const next = await updatePlatformSettings({ checkInGraceMinutes, platformFeeInr });
       setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
+      setPlatformFeeInr(Number(next?.platformFeeInr ?? 9));
       setSettingsNotice("Platform timeout updated successfully.");
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not save platform settings.");
@@ -422,7 +505,7 @@ export default function OperatorPage() {
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
           <h2 className="text-lg font-bold text-slate-800">Platform Settings</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Control the no-check-in auto-cancel grace period. This directly affects when a confirmed booking gets auto-cancelled if the guest never checks in.
+            Control no-check-in timeout and the fixed platform fee charged once per booking during checkout.
           </p>
 
           {settingsError ? (
@@ -453,12 +536,25 @@ export default function OperatorPage() {
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Platform Fee (INR per booking)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={999}
+                  value={platformFeeInr}
+                  onChange={(event) => setPlatformFeeInr(Number(event.target.value || 0))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
               <button
                 type="submit"
                 disabled={settingsSaving}
                 className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
-                {settingsSaving ? "Saving..." : "Save Timeout"}
+                {settingsSaving ? "Saving..." : "Save Settings"}
               </button>
             </form>
           )}
@@ -467,6 +563,122 @@ export default function OperatorPage() {
         <div className="mt-8">
           <DemandPricingPanel />
         </div>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Owner Commission Dues</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Review owner cash-checkout commission dues and confirm settlements.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void handleRunDuesNow()}
+                disabled={runDuesNowLoading}
+                className="rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 disabled:opacity-60"
+              >
+                {runDuesNowLoading ? "Running..." : "Run Due Creation Now"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  void loadOwnerDues();
+                  void loadOperatorNotices();
+                }}
+                className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Refresh Dues
+              </button>
+            </div>
+          </div>
+
+          {operatorNotices.length > 0 ? (
+            <div className="mt-4 space-y-2">
+              {operatorNotices.map((notice) => (
+                <div key={notice.id} className="flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <div>
+                    <p className="font-semibold">{notice.title}</p>
+                    <p className="mt-0.5 text-xs">{notice.message}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleDismissOperatorNotice(notice.id)}
+                    disabled={noticeActionLoadingId === notice.id}
+                    className="shrink-0 rounded-full border border-amber-300 px-2 py-0.5 text-xs font-semibold hover:bg-amber-100 disabled:opacity-60"
+                  >
+                    {noticeActionLoadingId === notice.id ? "Saving..." : "Dismiss"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {dueError ? (
+            <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              {dueError}
+            </div>
+          ) : null}
+          {dueNotice ? (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {dueNotice}
+            </div>
+          ) : null}
+
+          {dueLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading dues...</p>
+          ) : dueRows.length === 0 ? (
+            <p className="mt-4 text-sm italic text-slate-400">No pending or claimed dues right now.</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-slate-200 bg-white">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Owner</th>
+                    <th className="px-4 py-3 text-left">Booking</th>
+                    <th className="px-4 py-3 text-left">Bed Amount</th>
+                    <th className="px-4 py-3 text-left">Commission %</th>
+                    <th className="px-4 py-3 text-left">Due Amount</th>
+                    <th className="px-4 py-3 text-left">Owner Total Pending</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dueRows.map((due) => (
+                    <tr key={due.id}>
+                      <td className="px-4 py-3 text-slate-700">
+                        <p className="font-medium text-slate-800">{due.ownerName || due.ownerId || "-"}</p>
+                        <p className="text-xs text-slate-500">{due.ownerPhone || ""}</p>
+                      </td>
+                      <td className="px-4 py-3 text-slate-700">{due.bookingId || "-"}</td>
+                      <td className="px-4 py-3 text-slate-700">INR {Math.round(Number(due.bedAmount ?? 0)).toLocaleString("en-IN")}</td>
+                      <td className="px-4 py-3 text-slate-700">{Number(due.commissionPercent ?? 0)}%</td>
+                      <td className="px-4 py-3 font-semibold text-amber-700">INR {Math.round(Number(due.commissionAmountInr ?? 0)).toLocaleString("en-IN")}</td>
+                      <td className="px-4 py-3 text-slate-700">INR {Math.round(Number(due.ownerPendingCommissionInr ?? 0)).toLocaleString("en-IN")}</td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${String(due.status).toLowerCase() === "claimed" ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-700"}`}>
+                          {String(due.status).toLowerCase() === "claimed" ? "Claimed" : "Pending"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          type="button"
+                          onClick={() => void handleConfirmDue(due.id)}
+                          disabled={confirmDueLoadingId === due.id}
+                          className="rounded-full border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                        >
+                          {confirmDueLoadingId === due.id ? "Confirming..." : "Confirm Settlement"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
           <div className="flex items-center justify-between gap-3">

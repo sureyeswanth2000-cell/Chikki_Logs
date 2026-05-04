@@ -78,21 +78,26 @@ exports.detectCrossEntityAnomaly = onDocumentCreated("audit_logs/{logId}", async
     }
   }
 });
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https");
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const crypto = require("node:crypto");
+const Razorpay = require("razorpay");
 
 initializeApp();
 const db = getFirestore();
 
 const PLATFORM_SETTINGS_COLLECTION = "platform_settings";
 const PLATFORM_SETTINGS_DOC_ID = "main";
+const LEGACY_PLATFORM_SETTINGS_CITY_DOC = "_platform_cfg";
 const DEFAULT_CHECKIN_GRACE_MINUTES = 15;
 const MIN_CHECKIN_GRACE_MINUTES = 5;
 const MAX_CHECKIN_GRACE_MINUTES = 120;
+const DEFAULT_PLATFORM_BOOKING_FEE_INR = 9;
+const MIN_PLATFORM_BOOKING_FEE_INR = 0;
+const MAX_PLATFORM_BOOKING_FEE_INR = 999;
 const SCARCITY_MIN_BEDS = 1;
 const SCARCITY_MAX_BEDS = 5;
 const AADHAAR_VAULT_COLLECTION = "aadhaar_identity_vault";
@@ -110,8 +115,12 @@ const DEFAULT_DEMAND_CITY_THRESHOLDS = [
   { minOccupancyPercent: 90, multiplierPercent: 100 },
   { minOccupancyPercent: 80, multiplierPercent: 30 },
 ];
-const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = 10;
+const DEFAULT_PLATFORM_COMMISSION_PERCENT = 5;
+const MIN_PLATFORM_COMMISSION_PERCENT = 0;
+const MAX_PLATFORM_COMMISSION_PERCENT = 100;
+const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = DEFAULT_PLATFORM_COMMISSION_PERCENT;
 const DEFAULT_GATEWAY_FEE_PERCENT = 2;
+const RAZORPAY_ORDER_ID_PREFIX = "chk";
 
 function randomInt(min, max) {
   const safeMin = Math.ceil(Number(min));
@@ -127,17 +136,45 @@ function clampCheckInGraceMinutes(value) {
   return Math.max(MIN_CHECKIN_GRACE_MINUTES, Math.min(MAX_CHECKIN_GRACE_MINUTES, Math.round(parsed)));
 }
 
-async function readPlatformSettings() {
-  const ref = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
-  const snap = await ref.get();
-  if (!snap.exists) {
-    return {
-      checkInGraceMinutes: DEFAULT_CHECKIN_GRACE_MINUTES,
-    };
+function clampPlatformBookingFeeInr(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_PLATFORM_BOOKING_FEE_INR;
   }
-  const data = snap.data() || {};
+  return Math.max(MIN_PLATFORM_BOOKING_FEE_INR, Math.min(MAX_PLATFORM_BOOKING_FEE_INR, Math.round(parsed)));
+}
+
+function clampPlatformCommissionPercent(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_PLATFORM_COMMISSION_PERCENT;
+  }
+  return Math.max(MIN_PLATFORM_COMMISSION_PERCENT, Math.min(MAX_PLATFORM_COMMISSION_PERCENT, Math.round(parsed)));
+}
+
+async function readPlatformSettings() {
+  const [platformSettingsSnap, legacySettingsSnap] = await Promise.all([
+    db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID).get(),
+    db.collection("cities").doc(LEGACY_PLATFORM_SETTINGS_CITY_DOC).get(),
+  ]);
+  const data = platformSettingsSnap.exists ? (platformSettingsSnap.data() || {}) : {};
+  const legacyData = legacySettingsSnap.exists ? (legacySettingsSnap.data() || {}) : {};
   return {
-    checkInGraceMinutes: clampCheckInGraceMinutes(data.checkInGraceMinutes),
+    checkInGraceMinutes: clampCheckInGraceMinutes(
+      Object.prototype.hasOwnProperty.call(data, "checkInGraceMinutes")
+        ? data.checkInGraceMinutes
+        : legacyData.checkInGraceMinutes
+    ),
+    platformFeeInr: clampPlatformBookingFeeInr(
+      Object.prototype.hasOwnProperty.call(data, "platformFeeInr")
+        ? data.platformFeeInr
+        : legacyData.platformFeeInr
+    ),
+    platformCommissionPercent: clampPlatformCommissionPercent(
+      Object.prototype.hasOwnProperty.call(data, "platformCommissionPercent")
+        ? data.platformCommissionPercent
+        : DEFAULT_PLATFORM_COMMISSION_PERCENT
+    ),
   };
 }
 
@@ -145,6 +182,57 @@ function assertAuth(auth) {
   if (!auth || !auth.uid) {
     throw new HttpsError("unauthenticated", "Authentication required.");
   }
+}
+
+function assertInternalOperatorRole(auth) {
+  const role = String(auth?.token?.role ?? "").trim().toLowerCase();
+  if (role !== "operator" && role !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operators and superadmins can perform this action.");
+  }
+  return role;
+}
+
+function razorpayConfig() {
+  const keyId = String(process.env.RAZORPAY_KEY_ID ?? "").trim();
+  const keySecret = String(process.env.RAZORPAY_KEY_SECRET ?? "").trim();
+  const webhookSecret = String(process.env.RAZORPAY_WEBHOOK_SECRET ?? "").trim();
+  return { keyId, keySecret, webhookSecret };
+}
+
+function razorpayClient() {
+  const { keyId, keySecret } = razorpayConfig();
+  if (!keyId || !keySecret) {
+    throw new HttpsError("failed-precondition", "Razorpay is not configured. Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET.");
+  }
+  return new Razorpay({ key_id: keyId, key_secret: keySecret });
+}
+
+function razorpayPaymentSignature(orderId, paymentId) {
+  const { keySecret } = razorpayConfig();
+  if (!keySecret) {
+    throw new HttpsError("failed-precondition", "Razorpay key secret is not configured.");
+  }
+  return crypto
+    .createHmac("sha256", keySecret)
+    .update(`${orderId}|${paymentId}`)
+    .digest("hex");
+}
+
+function verifyRazorpayCheckoutSignature(orderId, paymentId, signature) {
+  const expected = razorpayPaymentSignature(orderId, paymentId);
+  return expected === String(signature ?? "").trim();
+}
+
+function verifyRazorpayWebhookSignature(rawBody, signature) {
+  const { webhookSecret } = razorpayConfig();
+  if (!webhookSecret) {
+    throw new HttpsError("failed-precondition", "Razorpay webhook secret is not configured.");
+  }
+  const expected = crypto
+    .createHmac("sha256", webhookSecret)
+    .update(rawBody)
+    .digest("hex");
+  return expected === String(signature ?? "").trim();
 }
 
 function normalizeText(value, maxLen) {
@@ -347,9 +435,18 @@ function resolveGatewayFeePercent(value) {
   return clampPercent(value, DEFAULT_GATEWAY_FEE_PERCENT);
 }
 
-function pricingConfigForOwner(ownerData = {}) {
+function pricingConfigForOwner(ownerData = {}, platformCommissionPercent = DEFAULT_PLATFORM_COMMISSION_PERCENT) {
+  const platformDefault = clampPlatformCommissionPercent(platformCommissionPercent);
+  // If owner has no explicit commission set, fall back to platform default.
+  // If owner has a custom rate (e.g. 25%), use that — even if platform default is higher.
+  const ownerHasCustomRate = Object.prototype.hasOwnProperty.call(ownerData, "ownerRevenueSharePercent")
+    && ownerData.ownerRevenueSharePercent !== null
+    && ownerData.ownerRevenueSharePercent !== undefined;
+  const effectiveCommission = ownerHasCustomRate
+    ? clampPlatformCommissionPercent(ownerData.ownerRevenueSharePercent)
+    : platformDefault;
   return {
-    ownerRevenueSharePercent: resolveOwnerRevenueSharePercent(ownerData.ownerRevenueSharePercent),
+    ownerRevenueSharePercent: effectiveCommission,
     gatewayFeePercent: resolveGatewayFeePercent(ownerData.gatewayFeePercent),
   };
 }
@@ -796,19 +893,45 @@ function computeCheckoutTotals({
   lockedHourlyBaseRate,
   lockedPlatformHourlyRate,
   lockedGatewayHourlyRate,
+  platformFeeInr,
   elapsedHours,
   advancePaid,
 }) {
   const safeHours = Math.max(1, elapsedHours);
-  const basePrice = Math.round(Number(lockedHourlyBaseRate ?? 120) * safeHours);
-  const commissionAmount = Math.round(Number(lockedPlatformHourlyRate ?? 12) * safeHours);
-  const gatewayAmount = Math.round(Number(lockedGatewayHourlyRate ?? 2) * safeHours);
-  const totalAmount = Math.round(Number(lockedHourlyRate ?? 134) * safeHours);
+  const legacyPlatformHourlyRate = Number(lockedPlatformHourlyRate ?? 0);
+  const legacyGatewayHourlyRate = Number(lockedGatewayHourlyRate ?? 0);
+  const hasLegacyRateBreakdown = legacyPlatformHourlyRate > 0 || legacyGatewayHourlyRate > 0;
+
+  let basePrice;
+  let commissionAmount;
+  let gatewayAmount;
+  let bedAmount;
+  let platformFeeAmount;
+  let totalAmount;
+
+  if (hasLegacyRateBreakdown) {
+    basePrice = Math.round(Number(lockedHourlyBaseRate ?? 120) * safeHours);
+    commissionAmount = Math.round(legacyPlatformHourlyRate * safeHours);
+    gatewayAmount = Math.round(legacyGatewayHourlyRate * safeHours);
+    bedAmount = basePrice + commissionAmount + gatewayAmount;
+    platformFeeAmount = 0;
+    totalAmount = Math.round(Number(lockedHourlyRate ?? bedAmount) * safeHours);
+  } else {
+    bedAmount = Math.round(Number(lockedHourlyRate ?? 120) * safeHours);
+    platformFeeAmount = bedAmount > 0 ? clampPlatformBookingFeeInr(platformFeeInr) : 0;
+    basePrice = bedAmount;
+    commissionAmount = 0;
+    gatewayAmount = 0;
+    totalAmount = bedAmount + platformFeeAmount;
+  }
+
   const remainingPaid = Math.max(totalAmount - Number(advancePaid ?? 100), 0);
   return {
     basePrice,
+    bedAmount,
     commissionAmount,
     gatewayAmount,
+    platformFeeAmount,
     totalAmount,
     remainingPaid,
   };
@@ -1149,6 +1272,86 @@ exports.getPlatformSettings = onCall({ cors: true }, async (request) => {
   };
 });
 
+exports.updatePlatformDefaultCommission = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only superadmin can update the platform default commission.");
+  }
+
+  const input = request.data || {};
+  if (!Object.prototype.hasOwnProperty.call(input, "platformCommissionPercent")) {
+    throw new HttpsError("invalid-argument", "platformCommissionPercent is required.");
+  }
+  const newDefault = clampPlatformCommissionPercent(input.platformCommissionPercent);
+
+  const currentSettings = await readPlatformSettings();
+  const oldDefault = currentSettings.platformCommissionPercent;
+
+  // Save new platform default
+  const settingsRef = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
+  await settingsRef.set({
+    platformCommissionPercent: newDefault,
+    updatedBy: callerUid,
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  // If increasing, bump all owners whose commission < new default and notify them
+  const affectedOwnerIds = [];
+  if (newDefault > oldDefault) {
+    const ownersSnap = await db.collection("users").where("role", "==", "owner").get();
+    const bumpBatch = db.batch();
+    for (const ownerDoc of ownersSnap.docs) {
+      const ownerData = ownerDoc.data() || {};
+      const current = typeof ownerData.ownerRevenueSharePercent === "number"
+        ? ownerData.ownerRevenueSharePercent
+        : oldDefault;
+      if (current < newDefault) {
+        bumpBatch.update(ownerDoc.ref, {
+          ownerRevenueSharePercent: newDefault,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        // Write notice for this owner
+        const noticeRef = db.collection("owner_notices").doc();
+        bumpBatch.set(noticeRef, {
+          ownerId: ownerDoc.id,
+          type: "commission_updated",
+          title: "Platform commission updated",
+          message: `The platform commission has been updated from ${oldDefault}% to ${newDefault}%. Your bed pricing commission is now ${newDefault}%. Consider reviewing your bed prices.`,
+          oldCommission: oldDefault,
+          newCommission: newDefault,
+          dismissed: false,
+          createdAt: FieldValue.serverTimestamp(),
+        });
+        affectedOwnerIds.push(ownerDoc.id);
+      }
+    }
+    await bumpBatch.commit();
+  }
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "platform_commission_updated",
+    entityType: "access",
+    entityId: PLATFORM_SETTINGS_DOC_ID,
+    metadata: {
+      oldDefault,
+      newDefault,
+      affectedOwnerCount: affectedOwnerIds.length,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    platformCommissionPercent: newDefault,
+    affectedOwnerCount: affectedOwnerIds.length,
+  };
+});
+
 exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
 
@@ -1159,14 +1362,23 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
   }
 
   const input = request.data || {};
-  if (!Object.prototype.hasOwnProperty.call(input, "checkInGraceMinutes")) {
-    throw new HttpsError("invalid-argument", "checkInGraceMinutes is required.");
+  const hasCheckInGraceMinutes = Object.prototype.hasOwnProperty.call(input, "checkInGraceMinutes");
+  const hasPlatformFeeInr = Object.prototype.hasOwnProperty.call(input, "platformFeeInr");
+  if (!hasCheckInGraceMinutes && !hasPlatformFeeInr) {
+    throw new HttpsError("invalid-argument", "At least one platform setting is required.");
   }
-  const nextCheckInGraceMinutes = clampCheckInGraceMinutes(input.checkInGraceMinutes);
+  const currentSettings = await readPlatformSettings();
+  const nextCheckInGraceMinutes = hasCheckInGraceMinutes
+    ? clampCheckInGraceMinutes(input.checkInGraceMinutes)
+    : currentSettings.checkInGraceMinutes;
+  const nextPlatformFeeInr = hasPlatformFeeInr
+    ? clampPlatformBookingFeeInr(input.platformFeeInr)
+    : currentSettings.platformFeeInr;
 
   const settingsRef = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
   await settingsRef.set({
     checkInGraceMinutes: nextCheckInGraceMinutes,
+    platformFeeInr: nextPlatformFeeInr,
     updatedBy: callerUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -1179,6 +1391,7 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
     entityId: PLATFORM_SETTINGS_DOC_ID,
     metadata: {
       checkInGraceMinutes: nextCheckInGraceMinutes,
+      platformFeeInr: nextPlatformFeeInr,
     },
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -1187,6 +1400,8 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
     ok: true,
     settings: {
       checkInGraceMinutes: nextCheckInGraceMinutes,
+      platformFeeInr: nextPlatformFeeInr,
+      platformCommissionPercent: currentSettings.platformCommissionPercent,
     },
   };
 });
@@ -1562,7 +1777,9 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
 
   const ownerSnap = ownerId ? await db.collection("users").doc(ownerId).get() : null;
   const ownerData = ownerSnap && ownerSnap.exists ? (ownerSnap.data() || {}) : {};
-  const pricingConfig = pricingConfigForOwner(ownerData);
+  const platformSettings = await readPlatformSettings();
+  const platformFeeInr = clampPlatformBookingFeeInr(platformSettings.platformFeeInr);
+  const pricingConfig = pricingConfigForOwner(ownerData, platformSettings.platformCommissionPercent);
 
   const [propertyDemandSnap, cityDemandSnap] = await Promise.all([
     db.collection(DEMAND_PRICING_COLLECTION).doc(demandScopeDocId("property", propertyId)).get(),
@@ -1680,14 +1897,11 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
     .map((bed) => ({
       ...bed,
       finalTotal: applyDemandMultiplier(
-        finalTotalFromBase(
-          computeBasePrice(duration, bed.bedType, {
-            hourlyPrice: bed.hourlyPrice,
-            overnightPrice: bed.overnightPrice,
-            overdayPrice: bed.overdayPrice,
-          }),
-          pricingConfig
-        ).totalAmount,
+        computeBasePrice(duration, bed.bedType, {
+          hourlyPrice: bed.hourlyPrice,
+          overnightPrice: bed.overnightPrice,
+          overdayPrice: bed.overdayPrice,
+        }),
         demandMultiplierPercent
       ),
     }))
@@ -1698,24 +1912,20 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
     overnightPrice: chosenBed.overnightPrice,
     overdayPrice: chosenBed.overdayPrice,
   });
-  const durationPricing = finalTotalFromBase(durationBasePrice, pricingConfig);
-  const durationRateLocked = applyDemandMultiplier(durationPricing.totalAmount, demandMultiplierPercent);
+  const durationRateLocked = applyDemandMultiplier(durationBasePrice, demandMultiplierPercent);
 
   const hourlyBasePrice = computeBasePrice("hourly", chosenBed.bedType, {
     hourlyPrice: chosenBed.hourlyPrice,
     overnightPrice: chosenBed.overnightPrice,
     overdayPrice: chosenBed.overdayPrice,
   });
-  const hourlyPricing = finalTotalFromBase(hourlyBasePrice, pricingConfig);
-  const lockedHourlyRate = applyDemandMultiplier(hourlyPricing.totalAmount, demandMultiplierPercent);
-  const lockedHourlyBaseRate = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
-  const lockedPlatformHourlyRate = applyDemandMultiplier(hourlyPricing.platformRevenueAmount, demandMultiplierPercent);
-  const lockedGatewayHourlyRate = applyDemandMultiplier(hourlyPricing.gatewayAmount, demandMultiplierPercent);
+  const lockedHourlyRate = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
 
+  const bedAmount = durationRateLocked;
   const basePrice = durationBasePrice;
-  const commissionAmount = durationPricing.platformRevenueAmount;
-  const gatewayAmount = durationPricing.gatewayAmount;
-  const totalAmount = durationRateLocked;
+  const commissionAmount = 0;
+  const gatewayAmount = 0;
+  const totalAmount = bedAmount + platformFeeInr;
   const advancePaid = 100;
   const remainingPaid = Math.max(totalAmount - advancePaid, 0);
   const bookingRef = db.collection("bookings").doc();
@@ -1778,8 +1988,11 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
       transaction.set(paymentRef, {
         bookingId: bookingRef.id,
         basePrice,
+        bedAmount,
         commissionAmount,
         gatewayAmount,
+        platformFeeAmount: platformFeeInr,
+        platformFeePerBooking: platformFeeInr,
         totalAmount,
         advancePaid,
         remainingPaid,
@@ -1792,9 +2005,10 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
         lockedDurationRate: durationRateLocked,
         lockedHourlyRate,
-        lockedHourlyBaseRate,
-        lockedPlatformHourlyRate,
-        lockedGatewayHourlyRate,
+        lockedHourlyBaseRate: lockedHourlyRate,
+        lockedPlatformHourlyRate: 0,
+        lockedGatewayHourlyRate: 0,
+        lockedBookingPlatformFeeInr: platformFeeInr,
         priceLockedAt: FieldValue.serverTimestamp(),
         paymentStatus: "advance_paid_placeholder",
         createdAt: FieldValue.serverTimestamp(),
@@ -1814,6 +2028,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
           bedType: chosenBed.bedType,
           ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
           gatewayFeePercent: pricingConfig.gatewayFeePercent,
+          platformFeeInr,
           demandActiveAtBooking: Boolean(demandSummary.active),
           demandWarningAtBooking: Boolean(demandSummary.warningActive),
           demandMultiplierPercent,
@@ -1898,10 +2113,145 @@ exports.authorizeOtpRequest = onCall({ cors: true }, async (request) => {
   };
 });
 
+exports.createRazorpayCheckoutOrder = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const userId = request.auth.uid;
+  const bookingId = String(request.data?.bookingId ?? "").trim();
+
+  if (!bookingId) {
+    throw new HttpsError("invalid-argument", "bookingId is required.");
+  }
+
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  const bookingSnap = await bookingRef.get();
+  if (!bookingSnap.exists) {
+    throw new HttpsError("not-found", "Booking not found.");
+  }
+  const bookingData = bookingSnap.data() || {};
+  if (String(bookingData.userId ?? "") !== userId) {
+    throw new HttpsError("permission-denied", "You are not allowed to create a payment order for this booking.");
+  }
+  if (String(bookingData.bookingStatus ?? "").toLowerCase() !== "checked_in") {
+    throw new HttpsError("failed-precondition", "Only checked-in bookings can initiate online checkout payment.");
+  }
+
+  let checkInMs = timestampToMillis(bookingData.checkInAt);
+  if (checkInMs === null) {
+    checkInMs = Date.now();
+  }
+  const checkoutMs = Date.now();
+  const elapsedHours = Math.max(1, Math.ceil((checkoutMs - checkInMs) / (1000 * 60 * 60)));
+  const bedId = String(bookingData.bedId ?? "");
+
+  const paymentSnapshot = await db.collection("payments").where("bookingId", "==", bookingId).limit(1).get();
+  if (paymentSnapshot.empty) {
+    throw new HttpsError("not-found", "Payment record not found for this booking.");
+  }
+  const paymentDoc = paymentSnapshot.docs[0];
+  const paymentData = paymentDoc.data() || {};
+  const advancePaid = Number(paymentData.advancePaid ?? 100);
+  const platformSettings = await readPlatformSettings();
+  const defaultPlatformFeeInr = clampPlatformBookingFeeInr(platformSettings.platformFeeInr);
+
+  const hasLockedRateSnapshot = Number.isFinite(Number(paymentData.lockedHourlyRate));
+  let checkoutTotalsInput;
+  if (hasLockedRateSnapshot) {
+    checkoutTotalsInput = {
+      lockedHourlyRate: Number(paymentData.lockedHourlyRate),
+      lockedHourlyBaseRate: Number(paymentData.lockedHourlyBaseRate ?? 120),
+      lockedPlatformHourlyRate: Number(paymentData.lockedPlatformHourlyRate ?? 12),
+      lockedGatewayHourlyRate: Number(paymentData.lockedGatewayHourlyRate ?? 2),
+      platformFeeInr: Number(
+        paymentData.lockedBookingPlatformFeeInr
+        ?? paymentData.platformFeePerBooking
+        ?? paymentData.platformFeeAmount
+        ?? defaultPlatformFeeInr
+      ),
+      elapsedHours,
+      advancePaid,
+    };
+  } else {
+    const bedSnap = await db.collection("beds").doc(bedId).get();
+    const bedData = bedSnap.exists ? bedSnap.data() : { hourlyPrice: 120, bedType: "NON_AC" };
+    const fallbackBaseRate = Number(bedData?.hourlyPrice ?? 120) + (String(bedData?.bedType ?? "NON_AC").toUpperCase() === "AC" ? 50 : 0);
+    checkoutTotalsInput = {
+      lockedHourlyRate: fallbackBaseRate,
+      lockedHourlyBaseRate: fallbackBaseRate,
+      lockedPlatformHourlyRate: 0,
+      lockedGatewayHourlyRate: 0,
+      platformFeeInr: defaultPlatformFeeInr,
+      elapsedHours,
+      advancePaid,
+    };
+  }
+
+  const totals = computeCheckoutTotals(checkoutTotalsInput);
+  if (totals.remainingPaid <= 0) {
+    return {
+      ok: true,
+      paymentRequired: false,
+      bookingId,
+      amountInr: 0,
+      amountPaise: 0,
+      keyId: null,
+      orderId: null,
+      currency: "INR",
+    };
+  }
+
+  const client = razorpayClient();
+  const { keyId } = razorpayConfig();
+  const amountPaise = Math.round(totals.remainingPaid * 100);
+  const receipt = `${RAZORPAY_ORDER_ID_PREFIX}_${bookingId.slice(0, 20)}_${Date.now()}`;
+
+  let order;
+  try {
+    order = await client.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt,
+      notes: {
+        bookingId,
+        userId,
+        purpose: "checkout_remaining",
+      },
+    });
+  } catch (error) {
+    console.error("[createRazorpayCheckoutOrder] Razorpay order creation failed:", error);
+    throw new HttpsError("internal", "Could not create Razorpay order. Try again.");
+  }
+
+  await paymentDoc.ref.set({
+    razorpayOrderId: String(order.id ?? ""),
+    razorpayOrderAmountPaise: amountPaise,
+    razorpayCurrency: "INR",
+    razorpayOrderStatus: String(order.status ?? "created"),
+    razorpayOrderCreatedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  return {
+    ok: true,
+    paymentRequired: true,
+    bookingId,
+    keyId,
+    orderId: String(order.id ?? ""),
+    amountInr: totals.remainingPaid,
+    amountPaise,
+    currency: "INR",
+    bookingCode: String(bookingData.bookingCode ?? bookingId),
+  };
+});
+
 exports.completeCheckout = onCall({ cors: true }, async (request) => {
   assertAuth(request.auth);
   const userId = request.auth.uid;
   const bookingId = String(request.data?.bookingId ?? "").trim();
+  const rawPaymentMethod = String(request.data?.paymentMethod ?? "cash").trim().toLowerCase();
+  const paymentMethod = rawPaymentMethod === "online" ? "online" : "cash";
+  const razorpayOrderId = String(request.data?.razorpayOrderId ?? "").trim();
+  const razorpayPaymentId = String(request.data?.razorpayPaymentId ?? "").trim();
+  const razorpaySignature = String(request.data?.razorpaySignature ?? "").trim();
 
   console.log(`[completeCheckout] Starting checkout for bookingId: ${bookingId}, userId: ${userId}`);
 
@@ -1955,6 +2305,8 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
   const paymentRef = paymentDoc.ref;
   const paymentData = paymentDoc.data() || {};
   const advancePaid = Number(paymentData.advancePaid ?? 100);
+  const platformSettings = await readPlatformSettings();
+  const defaultPlatformFeeInr = clampPlatformBookingFeeInr(platformSettings.platformFeeInr);
 
   const hasLockedRateSnapshot = Number.isFinite(Number(paymentData.lockedHourlyRate));
   let checkoutTotalsInput;
@@ -1965,6 +2317,12 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
       lockedHourlyBaseRate: Number(paymentData.lockedHourlyBaseRate ?? 120),
       lockedPlatformHourlyRate: Number(paymentData.lockedPlatformHourlyRate ?? 12),
       lockedGatewayHourlyRate: Number(paymentData.lockedGatewayHourlyRate ?? 2),
+      platformFeeInr: Number(
+        paymentData.lockedBookingPlatformFeeInr
+        ?? paymentData.platformFeePerBooking
+        ?? paymentData.platformFeeAmount
+        ?? defaultPlatformFeeInr
+      ),
       elapsedHours,
       advancePaid,
     };
@@ -1972,23 +2330,43 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
     const bedSnap = await db.collection("beds").doc(bedId).get();
     const bedData = bedSnap.exists ? bedSnap.data() : { hourlyPrice: 120, bedType: "NON_AC" };
     const fallbackBaseRate = Number(bedData?.hourlyPrice ?? 120) + (String(bedData?.bedType ?? "NON_AC").toUpperCase() === "AC" ? 50 : 0);
-    const fallbackPlatformRate = Math.round(fallbackBaseRate * 0.1);
-    const fallbackGatewayRate = Math.round(fallbackBaseRate * 0.02);
 
     checkoutTotalsInput = {
-      lockedHourlyRate: fallbackBaseRate + fallbackPlatformRate + fallbackGatewayRate,
+      lockedHourlyRate: fallbackBaseRate,
       lockedHourlyBaseRate: fallbackBaseRate,
-      lockedPlatformHourlyRate: fallbackPlatformRate,
-      lockedGatewayHourlyRate: fallbackGatewayRate,
+      lockedPlatformHourlyRate: 0,
+      lockedGatewayHourlyRate: 0,
+      platformFeeInr: defaultPlatformFeeInr,
       elapsedHours,
       advancePaid,
     };
   }
 
   const totals = computeCheckoutTotals(checkoutTotalsInput);
+  let onlineSettlement = null;
+  if (paymentMethod === "online" && totals.remainingPaid > 0) {
+    const storedOrderId = String(paymentData.razorpayOrderId ?? "").trim();
+    if (!storedOrderId || !razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      throw new HttpsError("invalid-argument", "Online checkout requires Razorpay orderId, paymentId, and signature.");
+    }
+    if (storedOrderId !== razorpayOrderId) {
+      throw new HttpsError("failed-precondition", "Razorpay order mismatch for this booking.");
+    }
+    const signatureValid = verifyRazorpayCheckoutSignature(razorpayOrderId, razorpayPaymentId, razorpaySignature);
+    if (!signatureValid) {
+      throw new HttpsError("permission-denied", "Invalid Razorpay payment signature.");
+    }
+    onlineSettlement = {
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+      onlinePaidInr: totals.remainingPaid,
+    };
+  }
 
   const checkoutIso = new Date(checkoutMs).toISOString();
   const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingId);
+  const finalRemainingPaid = paymentMethod === "online" ? 0 : totals.remainingPaid;
 
   try {
     await db.runTransaction(async (transaction) => {
@@ -1997,6 +2375,8 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
         bookingStatus: "completed",
         ownerCheckoutAlert: true,
         elapsedHours,
+        paymentMethod,
+        ...(paymentMethod === "cash" ? { commissionDueCreated: false } : {}),
         updatedAt: FieldValue.serverTimestamp(),
       });
 
@@ -2011,11 +2391,22 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
 
       transaction.update(paymentRef, {
         basePrice: totals.basePrice,
+        bedAmount: totals.bedAmount,
         commissionAmount: totals.commissionAmount,
         gatewayAmount: totals.gatewayAmount,
+        platformFeeAmount: totals.platformFeeAmount,
         totalAmount: totals.totalAmount,
-        remainingPaid: totals.remainingPaid,
-        paymentStatus: totals.remainingPaid > 0 ? "pending_settlement" : "settled",
+        remainingPaid: finalRemainingPaid,
+        paymentMethod,
+        paymentStatus: finalRemainingPaid > 0 ? "pending_settlement" : "settled",
+        ...(onlineSettlement
+          ? {
+              razorpayOrderId: onlineSettlement.razorpayOrderId,
+              razorpayPaymentId: onlineSettlement.razorpayPaymentId,
+              razorpaySignature: onlineSettlement.razorpaySignature,
+              razorpayCapturedAt: FieldValue.serverTimestamp(),
+            }
+          : {}),
         updatedAt: FieldValue.serverTimestamp(),
       });
 
@@ -2027,7 +2418,9 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
         entityId: bookingId,
         metadata: {
           elapsedHours,
-          remainingPaid: totals.remainingPaid,
+          remainingPaid: finalRemainingPaid,
+          paymentMethod,
+          razorpayPaymentId: onlineSettlement?.razorpayPaymentId ?? null,
           checkoutTime: checkoutIso,
         },
         createdAt: FieldValue.serverTimestamp(),
@@ -2043,11 +2436,95 @@ exports.completeCheckout = onCall({ cors: true }, async (request) => {
     bookingId,
     bookingCode: String(bookingData.bookingCode ?? bookingId),
     elapsedHours,
+    bedAmount: totals.bedAmount,
+    platformFeeAmount: totals.platformFeeAmount,
     totalAmount: totals.totalAmount,
     advancePaid,
-    remainingPaid: totals.remainingPaid,
+    remainingPaid: finalRemainingPaid,
+    paymentMethod,
+    razorpayPaymentId: onlineSettlement?.razorpayPaymentId ?? null,
     checkOutAt: checkoutIso,
   };
+});
+
+exports.razorpayWebhook = onRequest(async (request, response) => {
+  if (request.method !== "POST") {
+    response.status(405).send("Method not allowed");
+    return;
+  }
+
+  try {
+    const signature = String(request.headers["x-razorpay-signature"] ?? "").trim();
+    const rawBody = request.rawBody;
+    if (!rawBody || !Buffer.isBuffer(rawBody)) {
+      response.status(400).send("Missing raw body");
+      return;
+    }
+
+    const verified = verifyRazorpayWebhookSignature(rawBody, signature);
+    if (!verified) {
+      response.status(401).send("Invalid signature");
+      return;
+    }
+
+    const event = request.body || {};
+    const eventType = String(event.event ?? "").trim();
+    const paymentEntity = event?.payload?.payment?.entity || null;
+    const orderEntity = event?.payload?.order?.entity || null;
+    const orderId = String(paymentEntity?.order_id ?? orderEntity?.id ?? "").trim();
+    const paymentId = String(paymentEntity?.id ?? "").trim();
+
+    if (!orderId) {
+      response.status(200).json({ ok: true, ignored: true, reason: "missing_order_id" });
+      return;
+    }
+
+    const paymentSnap = await db.collection("payments").where("razorpayOrderId", "==", orderId).limit(1).get();
+    if (paymentSnap.empty) {
+      response.status(200).json({ ok: true, ignored: true, reason: "payment_not_found" });
+      return;
+    }
+
+    const paymentDoc = paymentSnap.docs[0];
+    const paymentData = paymentDoc.data() || {};
+    const bookingId = String(paymentData.bookingId ?? "").trim();
+    const bookingSnap = bookingId ? await db.collection("bookings").doc(bookingId).get() : null;
+    const bookingStatus = String(bookingSnap?.data()?.bookingStatus ?? "").toLowerCase();
+
+    const updateData = {
+      razorpayWebhookLastEvent: eventType,
+      razorpayWebhookLastAt: FieldValue.serverTimestamp(),
+      razorpayPaymentId: paymentId || String(paymentData.razorpayPaymentId ?? ""),
+      updatedAt: FieldValue.serverTimestamp(),
+    };
+
+    if (eventType === "payment.captured") {
+      updateData.paymentStatus = bookingStatus === "completed" ? "settled" : "online_paid_pending_checkout";
+      updateData.razorpayCapturedAt = FieldValue.serverTimestamp();
+    }
+
+    await paymentDoc.ref.set(updateData, { merge: true });
+
+    await db.collection("audit_logs").add({
+      actorUserId: "system",
+      actorRole: "system",
+      action: "razorpay_webhook_received",
+      entityType: "payment",
+      entityId: paymentDoc.id,
+      metadata: {
+        bookingId,
+        eventType,
+        orderId,
+        paymentId: paymentId || null,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    response.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("[razorpayWebhook] failed:", error);
+    response.status(500).send("Internal error");
+  }
 });
 
 exports.submitBookingRating = onCall({ cors: true }, async (request) => {
@@ -2813,4 +3290,246 @@ exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {
 
   await flushBatch();
   return { ok: true, cancelled, graceMinutes };
+});
+
+// ─── Commission Due Tracking ──────────────────────────────────────────────────
+
+const OWNER_COMMISSION_DUES_COLLECTION = "owner_commission_dues";
+const OPERATOR_NOTICES_COLLECTION = "operator_notices";
+
+async function createCommissionDuesNow({ actorUserId = "system", actorRole = "system", trigger = "schedule" } = {}) {
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  // Query completed cash bookings that have not had a commission due created yet
+  const completedSnap = await db.collection("bookings")
+    .where("bookingStatus", "==", "completed")
+    .where("paymentMethod", "==", "cash")
+    .where("commissionDueCreated", "==", false)
+    .get();
+
+  if (completedSnap.empty) {
+    return { ok: true, created: 0 };
+  }
+
+  const platformSettings = await readPlatformSettings();
+  const platformCommissionPercent = clampPlatformCommissionPercent(
+    platformSettings.platformCommissionPercent
+  );
+
+  let created = 0;
+  let batch = db.batch();
+  let opCount = 0;
+
+  async function flushCommissionBatch() {
+    if (opCount === 0) return;
+    await batch.commit();
+    batch = db.batch();
+    opCount = 0;
+  }
+
+  for (const bookingDoc of completedSnap.docs) {
+    const booking = bookingDoc.data() || {};
+    const bookingId = bookingDoc.id;
+    const ownerId = String(booking.ownerId ?? "").trim();
+    const propertyId = String(booking.propertyId ?? "").trim();
+    const bedId = String(booking.bedId ?? "").trim();
+    if (!ownerId) continue;
+
+    // Fetch the payment record to get the actual bedAmount settled
+    const paymentSnap = await db.collection("payments")
+      .where("bookingId", "==", bookingId)
+      .limit(1)
+      .get();
+    if (paymentSnap.empty) continue;
+
+    const payment = paymentSnap.docs[0].data() || {};
+    const bedAmount = Number(payment.bedAmount ?? 0);
+    if (bedAmount <= 0) continue;
+
+    // Get per-owner commission if set, else use platform default
+    const ownerSnap = await db.collection("users").doc(ownerId).get();
+    const ownerData = ownerSnap.exists ? (ownerSnap.data() || {}) : {};
+    const effectiveCommissionPercent = Number.isFinite(Number(ownerData.ownerRevenueSharePercent))
+      ? clampPlatformCommissionPercent(Number(ownerData.ownerRevenueSharePercent))
+      : platformCommissionPercent;
+
+    const commissionAmountInr = Math.round(bedAmount * effectiveCommissionPercent / 100);
+
+    // Write due doc
+    const dueRef = db.collection(OWNER_COMMISSION_DUES_COLLECTION).doc();
+    batch.set(dueRef, {
+      ownerId,
+      bookingId,
+      propertyId,
+      bedId,
+      commissionPercent: effectiveCommissionPercent,
+      commissionAmountInr,
+      bedAmount,
+      status: "pending",
+      bookingCompletedAt: booking.checkOutAt ?? nowIso,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+    opCount += 1;
+
+    // Mark booking so it won't be re-processed
+    batch.set(bookingDoc.ref, { commissionDueCreated: true, updatedAt: FieldValue.serverTimestamp() }, { merge: true });
+    opCount += 1;
+
+    // Increment owner's running total
+    batch.set(db.collection("users").doc(ownerId), {
+      pendingCommissionInr: FieldValue.increment(commissionAmountInr),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    opCount += 1;
+
+    created += 1;
+
+    if (opCount >= 450) {
+      await flushCommissionBatch();
+    }
+  }
+
+  await flushCommissionBatch();
+
+  await db.collection("audit_logs").add({
+    actorUserId,
+    actorRole,
+    action: "commission_dues_created",
+    entityType: "platform",
+    entityId: "commission_dues_job",
+    metadata: { created, ranAt: nowIso, trigger },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, created, ranAt: nowIso };
+}
+
+// Runs daily at 02:00 IST (UTC+5:30 = 20:30 UTC previous day)
+exports.createCommissionDues = onSchedule("every day 20:30", async () => {
+  return createCommissionDuesNow({
+    actorUserId: "system",
+    actorRole: "system",
+    trigger: "schedule",
+  });
+});
+
+exports.runCommissionDuesNow = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerRole = assertInternalOperatorRole(request.auth);
+  const actorUserId = request.auth.uid;
+  const result = await createCommissionDuesNow({
+    actorUserId,
+    actorRole: callerRole,
+    trigger: "manual",
+  });
+  return result;
+});
+
+exports.markCommissionDuePaid = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const userId = request.auth.uid;
+  const dueId = String(request.data?.dueId ?? "").trim();
+  if (!dueId) throw new HttpsError("invalid-argument", "dueId is required.");
+
+  const dueRef = db.collection(OWNER_COMMISSION_DUES_COLLECTION).doc(dueId);
+  const dueSnap = await dueRef.get();
+  if (!dueSnap.exists) throw new HttpsError("not-found", "Commission due not found.");
+
+  const due = dueSnap.data() || {};
+  if (String(due.ownerId ?? "") !== userId) {
+    throw new HttpsError("permission-denied", "You can only mark your own dues as paid.");
+  }
+  if (String(due.status ?? "") !== "pending") {
+    throw new HttpsError("failed-precondition", "This due is not in pending state.");
+  }
+
+  const nowIso = new Date().toISOString();
+
+  await db.runTransaction(async (transaction) => {
+    transaction.update(dueRef, {
+      status: "claimed",
+      claimedAt: nowIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    // Notify operator
+    transaction.set(db.collection(OPERATOR_NOTICES_COLLECTION).doc(), {
+      type: "commission_due_claimed",
+      title: "Owner marked commission as paid",
+      message: `Owner ${userId} has claimed payment of ₹${due.commissionAmountInr} for booking ${due.bookingId}. Please confirm receipt.`,
+      ownerId: userId,
+      dueId,
+      bookingId: String(due.bookingId ?? ""),
+      commissionAmountInr: Number(due.commissionAmountInr ?? 0),
+      dismissed: false,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: userId,
+      actorRole: "owner",
+      action: "commission_due_claimed",
+      entityType: "commission_due",
+      entityId: dueId,
+      metadata: { bookingId: String(due.bookingId ?? ""), commissionAmountInr: Number(due.commissionAmountInr ?? 0) },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return { ok: true, dueId, status: "claimed" };
+});
+
+exports.confirmCommissionDueSettlement = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerRole = request.auth.token?.role ?? "";
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operators and superadmins can confirm settlements.");
+  }
+  const operatorId = request.auth.uid;
+  const dueId = String(request.data?.dueId ?? "").trim();
+  if (!dueId) throw new HttpsError("invalid-argument", "dueId is required.");
+
+  const dueRef = db.collection(OWNER_COMMISSION_DUES_COLLECTION).doc(dueId);
+  const dueSnap = await dueRef.get();
+  if (!dueSnap.exists) throw new HttpsError("not-found", "Commission due not found.");
+
+  const due = dueSnap.data() || {};
+  const currentStatus = String(due.status ?? "");
+  if (currentStatus !== "claimed" && currentStatus !== "pending") {
+    throw new HttpsError("failed-precondition", "This due has already been confirmed or is in an invalid state.");
+  }
+
+  const ownerId = String(due.ownerId ?? "");
+  const commissionAmountInr = Number(due.commissionAmountInr ?? 0);
+  const nowIso = new Date().toISOString();
+
+  await db.runTransaction(async (transaction) => {
+    transaction.update(dueRef, {
+      status: "confirmed",
+      confirmedAt: nowIso,
+      confirmedByOperatorId: operatorId,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (ownerId && commissionAmountInr > 0) {
+      transaction.set(db.collection("users").doc(ownerId), {
+        pendingCommissionInr: FieldValue.increment(-commissionAmountInr),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: operatorId,
+      actorRole: callerRole,
+      action: "commission_due_confirmed",
+      entityType: "commission_due",
+      entityId: dueId,
+      metadata: { ownerId, bookingId: String(due.bookingId ?? ""), commissionAmountInr },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return { ok: true, dueId, status: "confirmed" };
 });

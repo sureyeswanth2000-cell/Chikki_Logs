@@ -15,6 +15,7 @@ import {
   getPlatformSettings,
   rejectOwnerApplication,
   revealAadhaarForInvestigation,
+  savePlatformDefaultCommission,
   searchUserByPhone,
   setCityScarcityMode,
   updateCity,
@@ -136,6 +137,11 @@ export default function InternalControlPage() {
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsNotice, setAppsNotice] = useState(null);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
+  const [platformFeeInr, setPlatformFeeInr] = useState(9);
+  const [platformCommissionPercent, setPlatformCommissionPercent] = useState(5);
+  const [commissionSaving, setCommissionSaving] = useState(false);
+  const [commissionNotice, setCommissionNotice] = useState(null);
+  const [commissionError, setCommissionError] = useState(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
@@ -196,6 +202,8 @@ export default function InternalControlPage() {
     try {
       const settings = await getPlatformSettings();
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
+      setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
+      setPlatformCommissionPercent(Number(settings?.platformCommissionPercent ?? 5));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not load platform settings.");
     } finally {
@@ -348,13 +356,37 @@ export default function InternalControlPage() {
     try {
       const next = await updatePlatformSettings({
         checkInGraceMinutes,
+        platformFeeInr,
       });
       setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
+      setPlatformFeeInr(Number(next?.platformFeeInr ?? 9));
+      setPlatformCommissionPercent(Number(next?.platformCommissionPercent ?? platformCommissionPercent));
       setSettingsNotice("Platform timeout updated successfully.");
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not save platform settings.");
     } finally {
       setSettingsSaving(false);
+    }
+  }
+
+  async function handleSaveCommission(event) {
+    event.preventDefault();
+    setCommissionSaving(true);
+    setCommissionError(null);
+    setCommissionNotice(null);
+    try {
+      const result = await savePlatformDefaultCommission(platformCommissionPercent);
+      setPlatformCommissionPercent(Number(result?.platformCommissionPercent ?? platformCommissionPercent));
+      const affected = result?.affectedOwnerCount ?? 0;
+      setCommissionNotice(
+        affected > 0
+          ? `Commission updated to ${result.platformCommissionPercent}%. ${affected} owner(s) were bumped up and notified.`
+          : `Commission default updated to ${result.platformCommissionPercent}%. No owners were affected.`
+      );
+    } catch (error) {
+      setCommissionError(error instanceof Error ? error.message : "Could not update commission.");
+    } finally {
+      setCommissionSaving(false);
     }
   }
 
@@ -661,7 +693,7 @@ export default function InternalControlPage() {
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-bold text-slate-800">Platform Settings</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Only superadmin can change no-check-in timeout. This directly controls auto-cancel and bed unlock behavior.
+              Only superadmin can change no-check-in timeout and fixed platform fee (charged once per booking at checkout).
             </p>
 
             {settingsError ? (
@@ -692,14 +724,62 @@ export default function InternalControlPage() {
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Platform Fee (INR per booking)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={999}
+                  value={platformFeeInr}
+                  onChange={(event) => setPlatformFeeInr(Number(event.target.value || 0))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
               <button
                 type="submit"
                 disabled={settingsSaving || settingsLoading}
                 className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
               >
-                {settingsSaving ? "Saving..." : "Save Timeout"}
+                {settingsSaving ? "Saving..." : "Save Settings"}
               </button>
             </form>
+
+            <div className="mt-6 border-t border-slate-200 pt-5">
+              <h3 className="text-sm font-bold text-slate-800">Platform Default Commission</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                Owners without a custom commission will use this default. If you increase it, all owners below the new default are bumped up and notified.
+              </p>
+              {commissionError && (
+                <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">{commissionError}</div>
+              )}
+              {commissionNotice && (
+                <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">{commissionNotice}</div>
+              )}
+              <form className="mt-3 flex flex-col gap-3 md:flex-row md:items-end" onSubmit={handleSaveCommission}>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Default Commission % (0–100)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={platformCommissionPercent}
+                    onChange={(event) => setPlatformCommissionPercent(Number(event.target.value || 0))}
+                    className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={commissionSaving || settingsLoading}
+                  className="rounded-full bg-indigo-700 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-800 disabled:opacity-60"
+                >
+                  {commissionSaving ? "Saving..." : "Update Commission"}
+                </button>
+              </form>
+            </div>
           </section>
         ) : null}
 

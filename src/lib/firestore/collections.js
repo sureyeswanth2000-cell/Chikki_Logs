@@ -17,4 +17,7 @@ export const COLLECTIONS = {
     demandWatchlist: "demand_watchlist",
     demandPricing: "demand_pricing",
     demandOverrides: "demand_overrides",
+    ownerNotices: "owner_notices",
+    ownerCommissionDues: "owner_commission_dues",
+    operatorNotices: "operator_notices",
 };

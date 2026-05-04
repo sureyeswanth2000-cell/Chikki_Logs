@@ -1,12 +1,16 @@
 import { addDoc, collection, doc, getDoc, getDocs, query, runTransaction, serverTimestamp, updateDoc, where, } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
-import { completeCheckout, createBookingWithAdvance as createBookingWithAdvanceCallable, submitBookingRating as submitBookingRatingCallable } from "@/lib/cloud/security";
+import {
+    completeCheckout,
+    createBookingWithAdvance as createBookingWithAdvanceCallable,
+    createRazorpayCheckoutOrder as createRazorpayCheckoutOrderCallable,
+    submitBookingRating as submitBookingRatingCallable,
+} from "@/lib/cloud/security";
 import { distanceKmBetween } from "@/lib/geo";
 import { applyDemandMultiplier } from "@/lib/demand-pricing";
 import pilotCities from "../../../data/pilot-cities.json";
-const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = 10;
-const DEFAULT_GATEWAY_FEE_PERCENT = 2;
+const DEFAULT_PLATFORM_FEE_INR = 9;
 function toTime(value) {
     const parsed = new Date(value).getTime();
     if (Number.isNaN(parsed)) {
@@ -33,28 +37,17 @@ function computeBasePrice(duration, bedType, ownerPrices = {}) {
     return baseByDuration[duration] + acExtra;
 }
 
-function clampPercent(value, fallback) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-        return fallback;
+async function readPlatformFeeInr() {
+    try {
+        const snapshot = await getDoc(doc(db, COLLECTIONS.cities, "_platform_cfg"));
+        if (!snapshot.exists()) {
+            return DEFAULT_PLATFORM_FEE_INR;
+        }
+        const next = Number(snapshot.data()?.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR);
+        return Number.isFinite(next) ? Math.max(0, Math.min(999, Math.round(next))) : DEFAULT_PLATFORM_FEE_INR;
+    } catch {
+        return DEFAULT_PLATFORM_FEE_INR;
     }
-    return Math.max(0, Math.min(100, parsed));
-}
-
-function resolveOwnerRevenueSharePercent(value) {
-    return clampPercent(value, DEFAULT_OWNER_REVENUE_SHARE_PERCENT);
-}
-
-function resolveGatewayFeePercent(value) {
-    return clampPercent(value, DEFAULT_GATEWAY_FEE_PERCENT);
-}
-
-function finalTotalFromBase(basePrice, pricingConfig = {}) {
-    const ownerRevenueSharePercent = resolveOwnerRevenueSharePercent(pricingConfig.ownerRevenueSharePercent);
-    const gatewayFeePercent = resolveGatewayFeePercent(pricingConfig.gatewayFeePercent);
-    const platformRevenueAmount = Math.round(basePrice * (ownerRevenueSharePercent / 100));
-    const gatewayAmount = Math.round(basePrice * (gatewayFeePercent / 100));
-    return basePrice + platformRevenueAmount + gatewayAmount;
 }
 function demandDocId(scope, scopeId) {
     return `${scope}_${String(scopeId ?? "").trim()}`;
@@ -228,6 +221,7 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
     const uniqueBedIds = [...new Set(rawBookings.map((item) => item.bedId).filter(Boolean))];
     const propertyMap = {};
     const bedMap = {};
+    const paymentMap = {};
 
     await Promise.all([
         ...uniquePropertyIds.map(async (propertyId) => {
@@ -253,6 +247,20 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
                 bedCode: String(data.bedCode ?? ""),
             };
         }),
+        ...rawBookings.map(async (booking) => {
+            const paySnap = await getDocs(
+                query(collection(db, COLLECTIONS.payments), where("bookingId", "==", booking.id))
+            );
+            if (paySnap.empty) return;
+            const payData = paySnap.docs[0].data();
+            paymentMap[booking.id] = {
+                bedAmount: Number(payData.bedAmount ?? 0),
+                platformFeeAmount: Number(payData.platformFeeAmount ?? 0),
+                totalAmount: Number(payData.totalAmount ?? 0),
+                advancePaid: Number(payData.advancePaid ?? 0),
+                remainingPaid: Number(payData.remainingPaid ?? 0),
+            };
+        }),
     ]);
 
     const enriched = rawBookings.map((item) => {
@@ -271,6 +279,11 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             checkInMs,
             checkOutMs,
             bucket: ongoing ? "ongoing" : "old",
+            bedAmount: paymentMap[item.id]?.bedAmount ?? null,
+            platformFeeAmount: paymentMap[item.id]?.platformFeeAmount ?? null,
+            totalAmount: paymentMap[item.id]?.totalAmount ?? null,
+            advancePaid: paymentMap[item.id]?.advancePaid ?? null,
+            remainingPaid: paymentMap[item.id]?.remainingPaid ?? null,
         };
     });
 
@@ -402,6 +415,7 @@ export async function getListingsByCity(filters) {
         ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
         : 0;
     const cityDemandSummary = await readDemandSummary("city", filters.cityId);
+    const platformFeeInr = await readPlatformFeeInr();
 
     const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
     const propertySnapshot = await getDocs(propertiesQuery);
@@ -422,34 +436,11 @@ export async function getListingsByCity(filters) {
         };
     });
     const listings = [];
-    const ownerPricingCache = new Map();
-
-    async function getOwnerPricing(ownerId) {
-        const key = String(ownerId ?? "").trim();
-        if (!key) {
-            return {
-                ownerRevenueSharePercent: DEFAULT_OWNER_REVENUE_SHARE_PERCENT,
-                gatewayFeePercent: DEFAULT_GATEWAY_FEE_PERCENT,
-            };
-        }
-        if (ownerPricingCache.has(key)) {
-            return ownerPricingCache.get(key);
-        }
-        const ownerSnapshot = await getDoc(doc(db, COLLECTIONS.users, key));
-        const ownerData = ownerSnapshot.exists() ? ownerSnapshot.data() : {};
-        const config = {
-            ownerRevenueSharePercent: resolveOwnerRevenueSharePercent(ownerData?.ownerRevenueSharePercent),
-            gatewayFeePercent: resolveGatewayFeePercent(ownerData?.gatewayFeePercent),
-        };
-        ownerPricingCache.set(key, config);
-        return config;
-    }
 
     for (const property of properties) {
         const propertyDemandSummary = await readDemandSummary("property", property.id);
         const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
         const demandMultiplierPercent = Number(demandSummary.multiplierPercent ?? 0);
-        const pricingConfig = await getOwnerPricing(property.ownerId);
         const roomsQuery = query(collection(db, COLLECTIONS.rooms), where("propertyId", "==", property.id));
         const roomsSnapshot = await getDocs(roomsQuery);
         const rooms = roomsSnapshot.docs.map((item) => {
@@ -516,29 +507,28 @@ export async function getListingsByCity(filters) {
             hourlyPrice: bed.hourlyPrice,
             overnightPrice: bed.overnightPrice,
             overdayPrice: bed.overdayPrice,
-            ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
-            gatewayFeePercent: pricingConfig.gatewayFeePercent,
-            displayHourlyPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("hourly", bed.bedType, {
+            displayHourlyPrice: applyDemandMultiplier(computeBasePrice("hourly", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), pricingConfig), demandMultiplierPercent),
-            displayOvernightPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("overnight", bed.bedType, {
+            }), demandMultiplierPercent),
+            displayOvernightPrice: applyDemandMultiplier(computeBasePrice("overnight", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), pricingConfig), demandMultiplierPercent),
-            displayOverdayPrice: applyDemandMultiplier(finalTotalFromBase(computeBasePrice("overday", bed.bedType, {
+            }), demandMultiplierPercent),
+            displayOverdayPrice: applyDemandMultiplier(computeBasePrice("overday", bed.bedType, {
                 hourlyPrice: bed.hourlyPrice,
                 overnightPrice: bed.overnightPrice,
                 overdayPrice: bed.overdayPrice,
-            }), pricingConfig), demandMultiplierPercent),
+            }), demandMultiplierPercent),
             demandActive: Boolean(demandSummary.active),
             demandWarningActive: Boolean(demandSummary.warningActive),
             demandMultiplierPercent,
             demandSource: demandSummary.source,
             demandReason: demandSummary.reason,
             demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
+            platformFeeInr,
             ratingAverage: bed.ratingAverage,
             ratingCount: bed.ratingCount,
         }));
@@ -548,24 +538,24 @@ export async function getListingsByCity(filters) {
         if (filteredBedOptions.length === 0) {
             continue;
         }
-        const basePriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice(filters.duration, item.bedType, {
+        const basePriceCandidates = filteredBedOptions.map((item) => computeBasePrice(filters.duration, item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        }), pricingConfig));
+        }));
         const priceCandidates = basePriceCandidates.map((amount) => applyDemandMultiplier(amount, demandMultiplierPercent));
         const hourlyPriceCandidates = filteredBedOptions.map((item) => item.displayHourlyPrice);
         const overnightPriceCandidates = filteredBedOptions.map((item) => item.displayOvernightPrice);
-        const baseHourlyPriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice("hourly", item.bedType, {
+        const baseHourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        }), pricingConfig));
-        const baseOvernightPriceCandidates = filteredBedOptions.map((item) => finalTotalFromBase(computeBasePrice("overnight", item.bedType, {
+        }));
+        const baseOvernightPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("overnight", item.bedType, {
             hourlyPrice: item.hourlyPrice,
             overnightPrice: item.overnightPrice,
             overdayPrice: item.overdayPrice,
-        }), pricingConfig));
+        }));
         const baseMinFinalPrice = Math.min(...basePriceCandidates);
         const baseMinHourlyPrice = Math.min(...baseHourlyPriceCandidates);
         const baseMinOvernightPrice = Math.min(...baseOvernightPriceCandidates);
@@ -608,6 +598,7 @@ export async function getListingsByCity(filters) {
             minFinalPrice,
             minHourlyPrice,
             minOvernightPrice,
+            platformFeeInr,
             demandActive: Boolean(demandSummary.active),
             demandWarningActive: Boolean(demandSummary.warningActive),
             demandMultiplierPercent,
@@ -773,7 +764,13 @@ export async function checkInConfirmedBooking(payload) {
 }
 
 export async function checkoutOpenBooking(payload) {
-    const summary = await completeCheckout(payload.bookingId);
+    const summary = await completeCheckout({
+        bookingId: payload.bookingId,
+        paymentMethod: payload.paymentMethod ?? "cash",
+        razorpayOrderId: payload.razorpayOrderId ?? "",
+        razorpayPaymentId: payload.razorpayPaymentId ?? "",
+        razorpaySignature: payload.razorpaySignature ?? "",
+    });
     if (!summary || !summary.bookingId) {
         throw new Error("Checkout failed.");
     }
@@ -781,10 +778,31 @@ export async function checkoutOpenBooking(payload) {
         bookingId: String(summary.bookingId),
         bookingCode: String(summary.bookingCode || summary.bookingId),
         elapsedHours: Number(summary.elapsedHours ?? 0),
+        bedAmount: Number(summary.bedAmount ?? 0),
+        platformFeeAmount: Number(summary.platformFeeAmount ?? 0),
         totalAmount: Number(summary.totalAmount ?? 0),
         advancePaid: Number(summary.advancePaid ?? 0),
         remainingPaid: Number(summary.remainingPaid ?? 0),
         checkOutAt: String(summary.checkOutAt ?? ""),
+    };
+}
+
+export async function createRazorpayCheckoutOrder(payload) {
+    const result = await createRazorpayCheckoutOrderCallable({
+        bookingId: payload?.bookingId,
+    });
+    if (!result || !result.ok) {
+        throw new Error("Could not create Razorpay order.");
+    }
+    return {
+        paymentRequired: Boolean(result.paymentRequired),
+        bookingId: String(result.bookingId ?? ""),
+        bookingCode: String(result.bookingCode ?? result.bookingId ?? ""),
+        keyId: result.keyId ? String(result.keyId) : "",
+        orderId: result.orderId ? String(result.orderId) : "",
+        amountInr: Number(result.amountInr ?? 0),
+        amountPaise: Number(result.amountPaise ?? 0),
+        currency: String(result.currency ?? "INR"),
     };
 }
 

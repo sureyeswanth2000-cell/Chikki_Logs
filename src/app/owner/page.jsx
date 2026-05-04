@@ -4,6 +4,7 @@ import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import {
     getOwnerCheckoutAlerts,
+    getOwnerDuesSummary,
     getOwnerLiveJobs,
     getOwnerUpcomingBookings,
 } from "@/lib/firestore/owner";
@@ -104,6 +105,11 @@ export default function OwnerPage() {
     const [futureBookings, setFutureBookings] = useState([]);
     const [checkoutAlerts, setCheckoutAlerts] = useState([]);
     const [activeBookingCount, setActiveBookingCount] = useState(0);
+    const [duesSummary, setDuesSummary] = useState({
+        pendingCommissionInr: 0,
+        pendingDueCount: 0,
+        claimedDueCount: 0,
+    });
 
     const loadOwnerData = useCallback(async () => {
         if (!user?.uid) return;
@@ -115,10 +121,12 @@ export default function OwnerPage() {
                 getOwnerUpcomingBookings(user.uid),
                 getOwnerCheckoutAlerts(user.uid),
             ]);
+            const dueSummary = await getOwnerDuesSummary(user.uid);
             setActiveBookings(liveJobItems);
             setFutureBookings(upcomingSummary.upcomingBookings);
             setActiveBookingCount(upcomingSummary.activeBookingCount);
             setCheckoutAlerts(alertItems);
+            setDuesSummary(dueSummary);
         } catch (loadError) {
             setError(loadError instanceof Error ? loadError.message : "Failed to load owner dashboard.");
         } finally {
@@ -158,7 +166,7 @@ export default function OwnerPage() {
                     <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>
                 ) : null}
 
-                <section className="mt-5 grid gap-3 sm:grid-cols-3">
+                <section className="mt-5 grid gap-3 sm:grid-cols-4">
                     <div className="glass-card rounded-xl p-4">
                         <p className="text-2xl font-bold text-slate-900">{loadingData ? "-" : activeBookings.length}</p>
                         <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Active Bookings</p>
@@ -170,6 +178,15 @@ export default function OwnerPage() {
                     <div className="glass-card rounded-xl p-4">
                         <p className="text-2xl font-bold text-amber-600">{loadingData ? "-" : checkoutAlerts.length}</p>
                         <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Checkout Pending</p>
+                    </div>
+                    <div className="glass-card rounded-xl p-4">
+                        <p className="text-2xl font-bold text-rose-700">
+                            {loadingData ? "-" : `INR ${Math.round(Number(duesSummary.pendingCommissionInr ?? 0)).toLocaleString("en-IN")}`}
+                        </p>
+                        <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Pending Platform Dues</p>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                            {loadingData ? "" : `${duesSummary.pendingDueCount} pending, ${duesSummary.claimedDueCount} claimed`}
+                        </p>
                     </div>
                 </section>
 

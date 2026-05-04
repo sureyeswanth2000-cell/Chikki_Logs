@@ -13,7 +13,7 @@
 - [x] Checkout should show start time, end time, total time spent, and final amount due.
 - [x] If the consumer spends less than 15 minutes, cancel the booking without payment.
 - [x] If the consumer spends 15 minutes or more but less than 60 minutes, charge one full hour.
-- [ ] Payment should be collected at checkout.
+- [x] Payment should be collected at checkout.
 - [x] Completed bookings can be rated once from booking history; the rating stays on the booking record.
 - [x] Bed rating averages/counts should be visible during listing search and exact bed selection.
 - [x] Aadhaar should be required from the second booking onward.
@@ -92,7 +92,13 @@
 - [ ] Harden booking flow against all dead ends and partial-state failures
 
 ## Pricing & Revenue Model
-- [ ] Remove hardcoded default platform commission percentage from bed prices — operator/superadmin should set a per-owner revenue share percentage during owner onboarding or approval
+- [ ] Replace hardcoded commission defaults with configurable platform commission defaults (start at 5%) controlled by operator/superadmin
+- [ ] Allow operator/superadmin to set per-owner commission overrides (can be below or above platform default) and use that override as the effective owner commission
+- [ ] Show consumers bed price only in listings/selection views; do not expose internal owner commission settlement details
+- [ ] Add fixed platform fee (default INR 9) at booking/checkout calculation time and allow superadmin to edit this fee from UI/platform settings
+- [ ] Show platform fee as a separate line item in booking/checkout summary for consumers (bed price + platform fee = final total)
+- [ ] Apply platform fee per booking (not per bed)
+- [ ] Do not charge platform fee on cancelled/no-charge bookings
 - [x] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [x] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
 - [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings
@@ -116,6 +122,17 @@
 - [x] Bed price shown to consumer must reflect a single all-inclusive price (owner base price + platform revenue share + gateway fee) — do not show the breakdown separately
 - [x] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
 - [x] Operator/superadmin can review and update agreed revenue share % per owner from their console
+- [x] Prepare Razorpay online payment integration (order creation, signature verification, webhook handling) so API keys can be added later
+- [ ] Support owner and consumer payout/settlement accounts for Razorpay-based money flow
+- [ ] Evaluate and implement bank-account verification (for example, INR 1 penny-drop) before enabling owner/consumer payout flows
+- [x] Track owner commission dues for cash-collected bookings and show pending platform dues in owner/operator views
+- [x] Add in-app owner settlement flow for paying pending platform dues; notify operator when owner marks a due payment complete
+- [x] Add operator action to run commission due creation on-demand in addition to nightly schedule
+- [x] Add owner dashboard quick card for pending platform dues summary
+- [ ] Auto-block new consumer bookings for an owner/property when unpaid commission instances >= 10 OR pending commission due exceeds INR 500
+- [ ] Auto-unblock booking after due settlement is confirmed, and provide operator manual unblock control with audit trail
+- [ ] Owners with high platform commission % (e.g., ≥ 25%) should receive special platform privileges or dedicated support — define privilege tiers, what benefits each tier grants, and implement in-app indicators and backend enforcement
+- [ ] Deploy Razorpay keys/secrets in Firebase Functions environment and run live-sandbox end-to-end checkout + webhook verification on production URL
 
 
 - [ ] Refine first-booking / second-booking Aadhaar UX copy and edge-case handling
@@ -187,6 +204,10 @@
 - [ ] After the originally booked duration ends and the stay is extended, apply hourly pricing automatically — charge the owner's configured hourly rate per additional hour
 - [ ] Add operator-controlled toggle: "First-hour new-user pricing" — when enabled, charge a separately configured first-hour price for first-time users instead of the standard hourly rate; operator can enable or disable this per-property or globally
 - [ ] Add alert system: send an in-app notification (and optionally SMS/email) to the consumer when their booked time is about to expire, warning them to check out or extend
+- [ ] Owner confirms cash-received at checkout; send consumer notification confirming payment receipt
+- [ ] Detect unusually high cancellation rate per bed/location; temporarily block affected bed(s), require owner reason, and allow only operator-approved unblock
+- [ ] Detect consumers with repeated cancellations near bed locations (threshold: >10 cancellations); auto-block consumer booking access until operator review and manual unblock
+- [ ] Even when cancelled bookings have no platform fee, continue counting cancellations for near-bed/location risk tracking and enforcement
 
 ## Train Tracking (Future)
 - [ ] If a consumer books a bed near a railway station, show a "Track My Train" option in their active booking view

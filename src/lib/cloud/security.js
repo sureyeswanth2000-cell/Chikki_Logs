@@ -52,13 +52,29 @@ export async function revealAadhaarBreakGlass(payload) {
   }
 }
 
-export async function completeCheckout(bookingId) {
+export async function completeCheckout({ bookingId, paymentMethod = "cash", razorpayOrderId = "", razorpayPaymentId = "", razorpaySignature = "" }) {
   const callable = httpsCallable(functionsClient(), "completeCheckout");
   try {
-    const result = await callable({ bookingId });
+    const result = await callable({
+      bookingId,
+      paymentMethod,
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature,
+    });
     return result.data || null;
   } catch (error) {
     throw new Error(toMessage(error, "Checkout failed."));
+  }
+}
+
+export async function createRazorpayCheckoutOrder(payload) {
+  const callable = httpsCallable(functionsClient(), "createRazorpayCheckoutOrder");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not create Razorpay checkout order."));
   }
 }
 
@@ -179,5 +195,45 @@ export async function allowOwnerDemandPricing(payload) {
     return result.data || null;
   } catch (error) {
     throw new Error(toMessage(error, "Could not allow demand pricing."));
+  }
+}
+
+export async function updatePlatformDefaultCommission(payload) {
+  const callable = httpsCallable(functionsClient(), "updatePlatformDefaultCommission");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update platform default commission."));
+  }
+}
+
+export async function markCommissionDuePaid(dueId) {
+  const callable = httpsCallable(functionsClient(), "markCommissionDuePaid");
+  try {
+    const result = await callable({ dueId });
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not mark due as paid."));
+  }
+}
+
+export async function confirmCommissionDueSettlement(dueId) {
+  const callable = httpsCallable(functionsClient(), "confirmCommissionDueSettlement");
+  try {
+    const result = await callable({ dueId });
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not confirm settlement."));
+  }
+}
+
+export async function runCommissionDuesNow() {
+  const callable = httpsCallable(functionsClient(), "runCommissionDuesNow");
+  try {
+    const result = await callable({});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not run commission due creation."));
   }
 }

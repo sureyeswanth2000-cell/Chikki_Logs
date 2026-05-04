@@ -5,6 +5,7 @@ import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import {
     checkInConfirmedBooking,
+    createRazorpayCheckoutOrder,
     checkoutOpenBooking,
     getActiveCities,
     getListingsByCity,
@@ -35,6 +36,33 @@ function readLocation(latValue, lngValue) {
     return { lat, lng };
 }
 
+async function ensureRazorpayLoaded() {
+    if (typeof window === "undefined") return false;
+    if (window.Razorpay) return true;
+    await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://checkout.razorpay.com/v1/checkout.js";
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error("Could not load Razorpay checkout script."));
+        document.body.appendChild(script);
+    });
+    return Boolean(window.Razorpay);
+}
+
+async function openRazorpayCheckout(options) {
+    return new Promise((resolve, reject) => {
+        const instance = new window.Razorpay({
+            ...options,
+            handler: (response) => resolve(response),
+            modal: {
+                ondismiss: () => reject(new Error("Payment was cancelled.")),
+            },
+        });
+        instance.open();
+    });
+}
+
 function ConsumerContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
@@ -55,6 +83,7 @@ function ConsumerContent() {
     const [openBookings, setOpenBookings] = useState([]);
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
     const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
+    const [checkoutPaymentMethodByBooking, setCheckoutPaymentMethodByBooking] = useState({});
     const initialSearchAppliedRef = useRef(false);
 
     const selectedCityName = useMemo(() => cities.find((item) => item.id === cityId)?.name ?? "", [cities, cityId]);
@@ -187,12 +216,60 @@ function ConsumerContent() {
 
     async function handleCheckoutBooking(bookingId) {
         if (!user?.uid) return;
+        const selectedMethod = String(checkoutPaymentMethodByBooking[bookingId] ?? "cash").toLowerCase();
+        const paymentMethod = selectedMethod === "online" ? "online" : "cash";
+
         setCheckoutLoadingId(bookingId);
         setError(null);
         setNotice(null);
         try {
-            const summary = await checkoutOpenBooking({ userId: user.uid, bookingId });
-            setNotice(`Checked out for ${summary.bookingCode}. Total ${summary.elapsedHours} hour(s). Remaining payment: INR ${summary.remainingPaid}.`);
+            let summary;
+            if (paymentMethod === "online") {
+                const loaded = await ensureRazorpayLoaded();
+                if (!loaded) {
+                    throw new Error("Could not initialize online payment.");
+                }
+                const order = await createRazorpayCheckoutOrder({ bookingId });
+                if (!order.paymentRequired) {
+                    summary = await checkoutOpenBooking({ userId: user.uid, bookingId, paymentMethod: "cash" });
+                } else {
+                    const paymentResult = await openRazorpayCheckout({
+                        key: order.keyId,
+                        amount: order.amountPaise,
+                        currency: order.currency,
+                        name: "Chikki",
+                        description: `Checkout payment for ${order.bookingCode || bookingId}`,
+                        order_id: order.orderId,
+                        prefill: {
+                            name: profile?.name || "",
+                            contact: user?.phoneNumber || "",
+                        },
+                        notes: {
+                            bookingId,
+                        },
+                        theme: {
+                            color: "#0f172a",
+                        },
+                    });
+
+                    summary = await checkoutOpenBooking({
+                        userId: user.uid,
+                        bookingId,
+                        paymentMethod: "online",
+                        razorpayOrderId: String(paymentResult.razorpay_order_id ?? ""),
+                        razorpayPaymentId: String(paymentResult.razorpay_payment_id ?? ""),
+                        razorpaySignature: String(paymentResult.razorpay_signature ?? ""),
+                    });
+                }
+            } else {
+                summary = await checkoutOpenBooking({ userId: user.uid, bookingId, paymentMethod });
+            }
+
+            setNotice(
+                `Checked out for ${summary.bookingCode}. Bed amount: INR ${summary.bedAmount}. `
+                + `Platform fee: INR ${summary.platformFeeAmount}. Remaining payment: INR ${summary.remainingPaid}. `
+                + `Payment method: ${paymentMethod.toUpperCase()}.`
+            );
             await loadOpenBookings();
         } catch (checkoutError) {
             setError(checkoutError instanceof Error ? checkoutError.message : "Checkout failed.");
@@ -309,9 +386,9 @@ function ConsumerContent() {
                                 <p className="mt-2 text-xs font-semibold text-amber-700">Demand is rising. Book now before prices increase.</p>
                             ) : null}
                             <p className="mt-2 text-sm font-semibold text-slate-900">Hourly from INR {item.minHourlyPrice} | Overnight from INR {item.minOvernightPrice}</p>
-                            <p className="mt-1 text-xs text-slate-500">All-inclusive consumer prices (includes platform and payment fees).</p>
+                            <p className="mt-1 text-xs text-slate-500">Shown rates are bed prices. Platform fee (INR {item.platformFeeInr ?? 9}) is added once per booking at checkout.</p>
                             <p className="mt-1 text-xs font-semibold text-slate-600">Bed rating: {ratingText(item.ratingAverage, item.ratingCount)}</p>
-                            <p className="mt-1 text-xs text-slate-500">Checkout uses the booking-time locked rate for actual stay hours.</p>
+                            <p className="mt-1 text-xs text-slate-500">Checkout uses the booking-time locked bed rate for actual stay hours.</p>
                             <div className="mt-3 flex gap-2">
                                 <a href={googleMapsDirectionsUrl({ lat: item.lat, lng: item.lng }, nearMeEnabled ? userLocation : null)} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Directions</a>
                                 <button type="button" onClick={() => openBookingPage(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
@@ -382,14 +459,36 @@ function ConsumerContent() {
                                                         {checkInLoadingId === item.id ? "Checking in..." : (item.canCheckIn ? "Check-In" : "Wait for time")}
                                                     </button>
                                                 ) : (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleCheckoutBooking(item.id)}
-                                                        disabled={checkoutLoadingId === item.id}
-                                                        className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60"
-                                                    >
-                                                        {checkoutLoadingId === item.id ? "Checking out..." : "Checkout"}
-                                                    </button>
+                                                    <div className="flex flex-col gap-1">
+                                                        <div className="flex items-center gap-2">
+                                                            <label className="text-[11px] font-medium text-slate-600" htmlFor={`checkout-method-${item.id}`}>
+                                                                Pay via
+                                                            </label>
+                                                            <select
+                                                                id={`checkout-method-${item.id}`}
+                                                                value={String(checkoutPaymentMethodByBooking[item.id] ?? "cash")}
+                                                                onChange={(event) => {
+                                                                    const value = String(event.target.value ?? "cash").toLowerCase();
+                                                                    setCheckoutPaymentMethodByBooking((current) => ({
+                                                                        ...current,
+                                                                        [item.id]: value,
+                                                                    }));
+                                                                }}
+                                                                className="rounded-full border border-slate-300 bg-white px-2 py-1 text-[11px] text-slate-700"
+                                                            >
+                                                                <option value="cash">Cash</option>
+                                                                <option value="online">Online (Razorpay)</option>
+                                                            </select>
+                                                        </div>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleCheckoutBooking(item.id)}
+                                                            disabled={checkoutLoadingId === item.id}
+                                                            className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50 disabled:opacity-60"
+                                                        >
+                                                            {checkoutLoadingId === item.id ? "Checking out..." : "Checkout"}
+                                                        </button>
+                                                    </div>
                                                 )}
                                             </td>
                                         </tr>
