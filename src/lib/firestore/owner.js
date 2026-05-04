@@ -903,8 +903,14 @@ export async function getOwnerNotices(ownerId) {
 }
 
 export async function dismissOwnerNotice(noticeId) {
+    if (!noticeId) return;
+    await updateDoc(doc(db, COLLECTIONS.ownerNotices, noticeId), {
+        dismissed: true,
+        dismissedAt: serverTimestamp(),
+    });
+}
 
-    export async function getOwnerCommissionDues(ownerId) {
+export async function getOwnerCommissionDues(ownerId) {
         if (!ownerId) return [];
         const snap = await getDocs(
             query(
@@ -925,14 +931,14 @@ export async function dismissOwnerNotice(noticeId) {
                 bookingCompletedAt: String(data.bookingCompletedAt ?? ""),
             };
         });
-    }
+}
 
-    export async function markOwnerDueAsPaid(dueId) {
+export async function markOwnerDueAsPaid(dueId) {
         if (!dueId) throw new Error("dueId is required.");
         await markCommissionDuePaidCallable(dueId);
-    }
+}
 
-    export async function getOwnerDuesSummary(ownerId) {
+export async function getOwnerDuesSummary(ownerId) {
         if (!ownerId) {
             return {
                 pendingCommissionInr: 0,
@@ -970,10 +976,4 @@ export async function dismissOwnerNotice(noticeId) {
             pendingDueCount,
             claimedDueCount,
         };
-    }
-    if (!noticeId) return;
-    await updateDoc(doc(db, COLLECTIONS.ownerNotices, noticeId), {
-        dismissed: true,
-        dismissedAt: serverTimestamp(),
-    });
 }

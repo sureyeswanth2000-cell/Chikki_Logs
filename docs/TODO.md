@@ -92,13 +92,13 @@
 - [ ] Harden booking flow against all dead ends and partial-state failures
 
 ## Pricing & Revenue Model
-- [ ] Replace hardcoded commission defaults with configurable platform commission defaults (start at 5%) controlled by operator/superadmin
-- [ ] Allow operator/superadmin to set per-owner commission overrides (can be below or above platform default) and use that override as the effective owner commission
+- [x] Replace hardcoded commission defaults with configurable platform commission defaults (start at 5%) controlled by operator/superadmin
+- [x] Allow operator/superadmin to set per-owner commission overrides (can be below or above platform default) and use that override as the effective owner commission
 - [ ] Show consumers bed price only in listings/selection views; do not expose internal owner commission settlement details
-- [ ] Add fixed platform fee (default INR 9) at booking/checkout calculation time and allow superadmin to edit this fee from UI/platform settings
+- [x] Add fixed platform fee (default INR 9) at booking/checkout calculation time and allow superadmin to edit this fee from UI/platform settings
 - [ ] Show platform fee as a separate line item in booking/checkout summary for consumers (bed price + platform fee = final total)
-- [ ] Apply platform fee per booking (not per bed)
-- [ ] Do not charge platform fee on cancelled/no-charge bookings
+- [x] Apply platform fee per booking (not per bed)
+- [x] Do not charge platform fee on cancelled/no-charge bookings
 - [x] Add an "Agreement" step during owner approval (superadmin/operator side) to record the agreed platform revenue share percentage per owner
 - [x] Store agreed revenue share % on the owner's record (set by operator/superadmin, not editable by owner)
 - [x] Owner earnings page should show owner received earnings by today, week, month, custom date, and total since starting only when the owner opens/requests earnings

@@ -45,6 +45,13 @@ async function main() {
       await setDoc(doc(db, "users", "ownerA"), { role: "owner" });
       await setDoc(doc(db, "users", "ownerB"), { role: "owner" });
       await setDoc(doc(db, "users", "superA"), { role: "superadmin" });
+      await setDoc(doc(db, "users", "operatorA"), { role: "operator" });
+
+      await setDoc(doc(db, "platform_settings", "main"), {
+        platformCommissionPercent: 5,
+        platformFeeInr: 9,
+        checkInGraceMinutes: 30,
+      });
 
       await setDoc(doc(db, "properties", "propA"), { ownerId: "ownerA" });
       await setDoc(doc(db, "properties", "propB"), { ownerId: "ownerB" });
@@ -115,6 +122,7 @@ async function main() {
     const consumerA = testEnv.authenticatedContext("consumerA").firestore();
     const ownerA = testEnv.authenticatedContext("ownerA").firestore();
     const superA = testEnv.authenticatedContext("superA").firestore();
+    const operatorA = testEnv.authenticatedContext("operatorA").firestore();
 
     const tests = [
       {
@@ -189,6 +197,76 @@ async function main() {
             updateDoc(doc(ownerA, "demand_overrides", "property_propA"), {
               disabledBy: "owner",
               reason: "manual",
+            }),
+          );
+        },
+      },
+
+      // --- platform_settings rules ---
+      {
+        name: "superadmin can read platform_settings",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(superA, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "operator can read platform_settings",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(operatorA, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "consumer cannot read platform_settings",
+        run: async () => {
+          await assertFails(getDoc(doc(consumerA, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "owner cannot read platform_settings",
+        run: async () => {
+          await assertFails(getDoc(doc(ownerA, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "superadmin can write platform_settings",
+        run: async () => {
+          await assertSucceeds(
+            setDoc(doc(superA, "platform_settings", "main"), {
+              platformCommissionPercent: 5,
+              platformFeeInr: 9,
+              checkInGraceMinutes: 30,
+            }),
+          );
+        },
+      },
+      {
+        name: "operator can write platform_settings",
+        run: async () => {
+          await assertSucceeds(
+            setDoc(doc(operatorA, "platform_settings", "main"), {
+              platformCommissionPercent: 7,
+              platformFeeInr: 9,
+              checkInGraceMinutes: 30,
+            }),
+          );
+        },
+      },
+      {
+        name: "consumer cannot write platform_settings",
+        run: async () => {
+          await assertFails(
+            setDoc(doc(consumerA, "platform_settings", "main"), {
+              platformFeeInr: 0,
+            }),
+          );
+        },
+      },
+      {
+        name: "owner cannot write platform_settings",
+        run: async () => {
+          await assertFails(
+            setDoc(doc(ownerA, "platform_settings", "main"), {
+              platformFeeInr: 0,
             }),
           );
         },
