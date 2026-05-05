@@ -7,7 +7,6 @@ import { useAuth } from "@/context/auth-context";
 import {
   addCity,
   approveOwnerApplication,
-  deleteCity,
   getCitiesWithOwners,
   getDailyGrowthOverview,
   getDashboardMetrics,

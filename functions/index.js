@@ -2292,7 +2292,7 @@ exports.authorizeOtpRequest = onCall({ cors: true }, async (request) => {
   let ipRate;
   
   if (isTestNumber) {
-    console.log(`[authorizeOtpRequest] Bypassing rate limit for test number: ${phoneNumber}`);
+    console.log("[authorizeOtpRequest] Bypassing rate limit for test number.");
     return {
       ok: true,
       cooldownSeconds: 0,

@@ -72,7 +72,7 @@ export default function OwnerEarningsPage() {
         getOwnerNotices(user.uid).then(setNotices).catch(() => {});
         getOwnerCommissionDues(user.uid)
             .then(setPendingDues)
-            .catch(() => {})
+            .catch(() => { setDuesError("Could not load commission dues. Please refresh."); })
             .finally(() => setDuesLoading(false));
     }, [user?.uid]);
 

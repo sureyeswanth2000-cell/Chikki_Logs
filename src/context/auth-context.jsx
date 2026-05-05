@@ -394,8 +394,7 @@ export function AuthProvider({ children }) {
         let auth, phoneNumber;
         try {
             phoneNumber = normalizePhone(rawPhone);
-            console.log("[OTP] Starting sendOtp with phone:", rawPhone);
-            console.log("[OTP] Normalized phone:", phoneNumber);
+            console.log("[OTP] Starting sendOtp");
 
             const effectiveCooldownUntil = readOtpCooldownUntil(phoneNumber);
             if (effectiveCooldownUntil > Date.now()) {
@@ -431,7 +430,7 @@ export function AuthProvider({ children }) {
             await verifier.render();
             console.log("[OTP] reCAPTCHA widget rendered successfully");
             
-            console.log("[OTP] Sending OTP to:", phoneNumber);
+            console.log("[OTP] Sending OTP...");
             confirmationRef.current = await signInWithPhoneNumber(auth, phoneNumber, verifier);
             console.log("[OTP] OTP sent successfully");
             
