@@ -2921,6 +2921,12 @@ exports.detectPaymentStatusAnomaly = onDocumentUpdated("payments/{paymentId}", a
 });
 
 exports.refreshCityScarcityValues = onSchedule("every 15 minutes", async () => {
+  // Honour the global emergency kill-switch from platform settings
+  const platformSnap = await db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID).get();
+  if (platformSnap.exists && platformSnap.data()?.globalScarcityDisabled === true) {
+    return { ok: true, refreshed: 0, skipped: "globalScarcityDisabled" };
+  }
+
   const citiesSnap = await db.collection("cities").where("scarcityEnabled", "==", true).get();
   if (citiesSnap.empty) {
     return { ok: true, refreshed: 0 };

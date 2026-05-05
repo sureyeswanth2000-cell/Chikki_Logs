@@ -450,6 +450,7 @@ export async function getPlatformSettings() {
     checkInGraceMinutes: Number(main.checkInGraceMinutes ?? legacy.checkInGraceMinutes ?? 15),
     platformFeeInr: Math.max(0, Number(main.platformFeeInr ?? legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR) || DEFAULT_PLATFORM_FEE_INR),
     platformCommissionPercent: Math.max(0, Math.min(100, Number(main.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT))),
+    globalScarcityDisabled: Boolean(main.globalScarcityDisabled ?? false),
   };
 }
 
@@ -541,9 +542,10 @@ export async function dismissOperatorNotice(noticeId) {
   });
 }
 
-export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr }) {
+export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr, globalScarcityDisabled }) {
   const clamped = Math.min(120, Math.max(5, Number(checkInGraceMinutes) || 15));
   const nextPlatformFee = Math.min(999, Math.max(0, Number(platformFeeInr) || DEFAULT_PLATFORM_FEE_INR));
+  const scarcityKillSwitch = Boolean(globalScarcityDisabled);
   // Write to both canonical platform_settings/main AND legacy _platform_cfg for backward compat
   await Promise.all([
     setDoc(
@@ -551,6 +553,7 @@ export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeI
       {
         checkInGraceMinutes: clamped,
         platformFeeInr: nextPlatformFee,
+        globalScarcityDisabled: scarcityKillSwitch,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -569,8 +572,9 @@ export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeI
   await writeAuditLog("platform_settings_updated", "platform_settings", "main", {
     checkInGraceMinutes: clamped,
     platformFeeInr: nextPlatformFee,
+    globalScarcityDisabled: scarcityKillSwitch,
   });
-  return { checkInGraceMinutes: clamped, platformFeeInr: nextPlatformFee };
+  return { checkInGraceMinutes: clamped, platformFeeInr: nextPlatformFee, globalScarcityDisabled: scarcityKillSwitch };
 }
 
 export async function getOwnersForCommissionManagement() {

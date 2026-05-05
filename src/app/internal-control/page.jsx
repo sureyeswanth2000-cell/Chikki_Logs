@@ -149,6 +149,8 @@ export default function InternalControlPage() {
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsError, setSettingsError] = useState(null);
   const [settingsNotice, setSettingsNotice] = useState(null);
+  const [globalScarcityDisabled, setGlobalScarcityDisabled] = useState(false);
+  const [scarcityKillSaving, setScarcityKillSaving] = useState(false);
   const [scarcitySavingCityId, setScarcitySavingCityId] = useState("");
   const [growthStats, setGrowthStats] = useState(null);
   const [growthLoading, setGrowthLoading] = useState(false);
@@ -217,6 +219,7 @@ export default function InternalControlPage() {
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
       setPlatformCommissionPercent(Number(settings?.platformCommissionPercent ?? 5));
+      setGlobalScarcityDisabled(Boolean(settings?.globalScarcityDisabled ?? false));
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not load platform settings.");
     } finally {
@@ -407,10 +410,12 @@ export default function InternalControlPage() {
       const next = await updatePlatformSettings({
         checkInGraceMinutes,
         platformFeeInr,
+        globalScarcityDisabled,
       });
       setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(next?.platformFeeInr ?? 9));
       setPlatformCommissionPercent(Number(next?.platformCommissionPercent ?? platformCommissionPercent));
+      setGlobalScarcityDisabled(Boolean(next?.globalScarcityDisabled ?? false));
       setSettingsNotice("Platform timeout updated successfully.");
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not save platform settings.");
@@ -467,6 +472,19 @@ export default function InternalControlPage() {
     if (!searchResult) return;
     setSearchError(null);
     setSearchNotice(null);
+
+    // Extra confirmation when granting elevated access
+    if (selectedRole === "operator" || selectedRole === "superadmin") {
+      const displayName = searchResult.name || searchResult.phoneNumber || "this user";
+      const accessDescription =
+        selectedRole === "operator"
+          ? "Operators can manage all bookings, override owner blocks, settle commissions, and see platform financials across every city."
+          : "Superadmins have unrestricted platform access including identity break-glass, role changes, and billing controls.";
+      const confirmed = window.confirm(
+        `Promote "${displayName}" to ${selectedRole.toUpperCase()}?\n\n${accessDescription}\n\nThis grants significant platform access. Proceed only if you are certain.`
+      );
+      if (!confirmed) return;
+    }
 
     try {
       const result = await updateManagedUserRole(
@@ -847,6 +865,58 @@ export default function InternalControlPage() {
                   {commissionSaving ? "Saving..." : "Update Commission"}
                 </button>
               </form>
+            </div>
+
+            <div className="mt-6 border-t border-slate-200 pt-5">
+              <h3 className="text-sm font-bold text-slate-800">Global Scarcity Emergency Off Switch</h3>
+              <p className="mt-1 text-xs text-slate-500">
+                When enabled, the 15-minute scarcity refresh job is suppressed globally — all cities will stop receiving fake bed count updates until you turn this off.
+              </p>
+              <div className="mt-3 flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = !globalScarcityDisabled;
+                    const label = next ? "DISABLE all scarcity globally" : "Re-enable scarcity globally";
+                    const warning = next
+                      ? "This will immediately stop scarcity refresh for ALL cities. Consumers will see real bed counts next time scarcity refreshes."
+                      : "Scarcity refresh will resume on the next 15-minute schedule.";
+                    if (!window.confirm(`${label}?\n\n${warning}`)) return;
+                    setScarcityKillSaving(true);
+                    setSettingsError(null);
+                    setSettingsNotice(null);
+                    try {
+                      const result = await updatePlatformSettings({
+                        checkInGraceMinutes,
+                        platformFeeInr,
+                        globalScarcityDisabled: next,
+                      });
+                      setGlobalScarcityDisabled(Boolean(result?.globalScarcityDisabled ?? next));
+                      setSettingsNotice(next ? "Scarcity mode globally disabled." : "Scarcity mode re-enabled.");
+                    } catch (error) {
+                      setSettingsError(error instanceof Error ? error.message : "Could not update scarcity kill switch.");
+                    } finally {
+                      setScarcityKillSaving(false);
+                    }
+                  }}
+                  disabled={scarcityKillSaving || settingsLoading}
+                  className={[
+                    "rounded-full px-4 py-2 text-sm font-semibold transition disabled:opacity-60",
+                    globalScarcityDisabled
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-rose-600 text-white hover:bg-rose-700",
+                  ].join(" ")}
+                >
+                  {scarcityKillSaving
+                    ? "Saving..."
+                    : globalScarcityDisabled
+                    ? "Re-Enable Scarcity"
+                    : "Disable All Scarcity"}
+                </button>
+                <span className={["text-sm font-semibold", globalScarcityDisabled ? "text-rose-600" : "text-emerald-600"].join(" ")}>
+                  {globalScarcityDisabled ? "⚠ Scarcity globally OFF" : "✓ Scarcity globally ON"}
+                </span>
+              </div>
             </div>
           </section>
         ) : null}
