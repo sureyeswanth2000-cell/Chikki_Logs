@@ -1,8 +1,22 @@
 # Work Log
 
+## 2026-05-05
+
+### Completed
+- Added route-level `prefetch={false}` on key public/auth/booking links in addition to shared menu/footer links.
+- Hardened protected-route redirects for static-hosted base path handling and trailing-slash redirects.
+- Deployed Hosting updates to Firebase production (`https://chikki-logs-72607.web.app`) after each mitigation pass.
+- Re-ran Firestore security rules tests after each code change (`npm run test:security:rules`), all passing.
+
+### Verification Notes
+- Production network rechecks still show repeated `__next.*.__PAGE__.txt?_rsc=...` 404 responses across login/register/history/apply-owner/consumer/profile/support route sampling.
+- Guest protected-route smoke checks were run on production for `/history`, `/consumer`, `/profile`, and `/apply-owner`; authenticated role-to-role checks (for example consumer -> operator) are still pending role test accounts.
+- Unauthorized page and back-button behavior were sampled in production, but full per-role redirect-type validation is still pending authenticated test sessions.
+
 ## 2026-05-01
 
 ### Completed
+- Added `docs/DEMAND_PRICING_LOGIC.md` as the single easy-to-read source for on-demand pricing rules, permissions, jobs, Firestore collections, UI locations, and pending verification.
 - Expanded automatic peak-demand pricing into a concrete implementation checklist in `docs/TODO.md`.
 - Added shared demand-pricing rule helpers in `src/lib/demand-pricing.js`:
   - property thresholds: 70-89% occupancy adds 20%, 90-100% adds 50%

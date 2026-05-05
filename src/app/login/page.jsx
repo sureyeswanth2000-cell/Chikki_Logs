@@ -191,7 +191,7 @@ export default function LoginPage() {
         </p>
 
         <div className="mt-5 mb-5">
-          <Link href="/" className="text-sm font-medium text-slate-700 underline decoration-sky-500">
+          <Link href="/" prefetch={false} className="text-sm font-medium text-slate-700 underline decoration-sky-500">
             Back to Home
           </Link>
         </div>

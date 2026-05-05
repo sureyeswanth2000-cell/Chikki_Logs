@@ -15,6 +15,30 @@ function currentHref(pathname) {
     return `${pathname || "/"}${window.location.search || ""}`;
 }
 
+function staticHostedBasePath() {
+    if (typeof window === "undefined") return "";
+    const path = window.location.pathname || "";
+    if (path === "/Chikki_Logs" || path.startsWith("/Chikki_Logs/")) {
+        return "/Chikki_Logs";
+    }
+    return "";
+}
+
+function hardRedirect(path) {
+    if (typeof window === "undefined") return false;
+    const [rawPathname, query = ""] = String(path || "").split("?");
+    const pathname = rawPathname && rawPathname !== "/" && !rawPathname.endsWith("/")
+        ? `${rawPathname}/`
+        : (rawPathname || "/");
+    const normalizedPath = query ? `${pathname}?${query}` : pathname;
+    const basePath = staticHostedBasePath();
+    const destination = basePath && !normalizedPath.startsWith(basePath)
+        ? `${basePath}${normalizedPath}`
+        : normalizedPath;
+    window.location.replace(destination);
+    return true;
+}
+
 export function ProtectedRoute({ children, allowedRoles }) {
     const { loading, user, profile } = useAuth();
     const pathname = usePathname();
@@ -25,7 +49,9 @@ export function ProtectedRoute({ children, allowedRoles }) {
         if (!loading && !user) {
             const currentPath = currentHref(pathname);
             const next = encodeURIComponent(currentPath);
-            router.replace(`/login?next=${next}`);
+            if (!hardRedirect(`/login?next=${next}`)) {
+                router.replace(`/login?next=${next}`);
+            }
         }
     }, [loading, user, pathname, router]);
 
@@ -40,14 +66,20 @@ export function ProtectedRoute({ children, allowedRoles }) {
         if (!profileTimeout) return;
         if (!profile || !allowedRoles.includes(profile.role)) {
             const currentPath = currentHref(pathname);
-            router.replace(unauthorizedHref(currentPath));
+            const destination = unauthorizedHref(currentPath);
+            if (!hardRedirect(destination)) {
+                router.replace(destination);
+            }
         }
     }, [profileTimeout, profile, allowedRoles, pathname, router]);
 
     useEffect(() => {
         if (!loading && user && profile && !allowedRoles.includes(profile.role)) {
             const currentPath = currentHref(pathname);
-            router.replace(unauthorizedHref(currentPath));
+            const destination = unauthorizedHref(currentPath);
+            if (!hardRedirect(destination)) {
+                router.replace(destination);
+            }
         }
     }, [loading, user, profile, allowedRoles, pathname, router]);
 

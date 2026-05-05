@@ -105,7 +105,7 @@ export default function Home() {
 
           <div className="mt-7 flex flex-wrap gap-3">
             {!loading && !user ? (
-              <Link href="/login" className="shine-button rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50">
+              <Link href="/login" prefetch={false} className="shine-button rounded-full border border-sky-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-sky-300 hover:bg-sky-50">
                 Login
               </Link>
             ) : null}
@@ -146,7 +146,7 @@ export default function Home() {
 
           <div className="mt-5 flex flex-wrap gap-3">
             {!loading && !user ? (
-              <Link href="/login" className="shine-button rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-500">
+              <Link href="/login" prefetch={false} className="shine-button rounded-full bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-500">
                 Start with Login
               </Link>
             ) : null}
@@ -163,7 +163,7 @@ export default function Home() {
           </p>
 
           <div className="mt-5 flex flex-wrap gap-3">
-            <Link href="/apply-owner" className="shine-button rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700">
+            <Link href="/apply-owner" prefetch={false} className="shine-button rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700">
               Apply as Owner
             </Link>
             <button type="button" onClick={openConsumerWithCity} className="rounded-full border border-indigo-300 px-4 py-2 text-sm font-semibold text-indigo-700 transition hover:bg-indigo-50">

@@ -205,11 +205,11 @@ export default function RegisterPage() {
                 <div className="mt-5 space-y-2">
                     <p className="text-sm text-slate-600">
                         Already have an account?{" "}
-                        <Link href="/login" className="font-medium text-sky-600 underline decoration-sky-500">
+                        <Link href="/login" prefetch={false} className="font-medium text-sky-600 underline decoration-sky-500">
                             Login
                         </Link>
                     </p>
-                    <Link href="/" className="text-sm font-medium text-slate-700 underline decoration-sky-500">
+                    <Link href="/" prefetch={false} className="text-sm font-medium text-slate-700 underline decoration-sky-500">
                         Back to Home
                     </Link>
                 </div>

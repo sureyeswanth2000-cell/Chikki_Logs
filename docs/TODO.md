@@ -31,7 +31,7 @@
 - [x] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app — deployed `submitBookingRating` + `submitBookingRatingHttp` on 2026-05-05 and verified preflight/POST CORS headers on production
 - [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error) — deployment complete; pending authenticated production consumer booking validation
 - [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
-- [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise — checked 2026-05-05 on public routes; repeated `__next.*.__PAGE__.txt?_rsc` 404 responses are still present
+- [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise — rechecked after additional route-level prefetch suppression + protected-route redirect hardening on 2026-05-05; repeated `__next.*.__PAGE__.txt?_rsc` 404 responses still present in production
 - [x] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally — installed Temurin JDK 21, configured `JAVA_HOME`/PATH, and passed `npm run test:security:rules` on 2026-05-05
 
 ## Security (2026-04-24 Audit Complete)
@@ -51,12 +51,12 @@
 - [x] Deploy Aadhaar vault/reveal functions and Firestore vault-blocking rules to Firebase
 - [x] Deploy hidden superadmin Identity Access UI to Firebase Hosting
 - [ ] Add production MFA/second-approval guard before Aadhaar break-glass reveal
-- [ ] Run manual end-to-end verification: login as each role and verify redirects work correctly
-- [ ] Test unauthorized role access (e.g., consumer tries to access /operator)
+- [ ] Run manual end-to-end verification: login as each role and verify redirects work correctly — guest-only production smoke checks done on 2026-05-05; role-authenticated verification still pending test accounts
+- [ ] Test unauthorized role access (e.g., consumer tries to access /operator) — guest protected-route checks done on 2026-05-05; authenticated consumer->operator case still pending
 - [ ] Test 4-second profile load timeout triggers correctly
 - [ ] Verify `/unauthorized` page displays correct recovery guidance for each redirect type
 - [ ] Test back-button behavior after unauthorized redirect
-- [ ] Record the verified results in `docs/WORK_LOG.md`
+- [x] Record the verified results in `docs/WORK_LOG.md`
 
 ## Auth And Routing
 - [x] Fix superadmin page incorrectly redirecting to consumer page — superadmin should stay on the superadmin dashboard after login

@@ -298,7 +298,7 @@ function BookingContent() {
                 ) : !listing ? (
                     <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
                         <p className="text-sm text-slate-600">Return to search and choose another available bed.</p>
-                        <Link href={backToSearchHref} className="mt-4 inline-block rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
+                        <Link href={backToSearchHref} prefetch={false} className="mt-4 inline-block rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
                             Back To Search
                         </Link>
                     </section>
@@ -374,7 +374,7 @@ function BookingContent() {
                                         <button type="submit" className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
                                             Review Booking
                                         </button>
-                                        <Link href={backToSearchHref} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                                        <Link href={backToSearchHref} prefetch={false} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
                                             Back To Search
                                         </Link>
                                     </div>
@@ -438,7 +438,7 @@ function BookingContent() {
                                     <h3 className="text-sm font-semibold text-emerald-800">Booking opened</h3>
                                     <p className="mt-1 text-sm text-emerald-700">You can check in from Live / Open Bookings when your start time arrives.</p>
                                     <div className="mt-4 flex flex-wrap gap-3">
-                                        <Link href={backToSearchHref} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
+                                        <Link href={backToSearchHref} prefetch={false} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
                                             View Open Bookings
                                         </Link>
                                         <button type="button" onClick={() => router.refresh()} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
