@@ -28,11 +28,11 @@
 - [x] Re-run this checklist after any auth, role, or redirect change
 - [x] Add a 30-second OTP resend flow for consumers and keep the resend button disabled until the timer ends
 - [x] Fix OTP state reset when phone number is edited: old OTP attempt/timer state is still counted, and the UI does not reset to show a fresh Send OTP button for the new number
-- [ ] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app — repo workflow is ready; pending manual GitHub Firebase production deploy and live verification
-- [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error)
+- [x] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app — deployed `submitBookingRating` + `submitBookingRatingHttp` on 2026-05-05 and verified preflight/POST CORS headers on production
+- [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error) — deployment complete; pending authenticated production consumer booking validation
 - [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
-- [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise
-- [ ] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally
+- [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise — checked 2026-05-05 on public routes; repeated `__next.*.__PAGE__.txt?_rsc` 404 responses are still present
+- [x] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally — installed Temurin JDK 21, configured `JAVA_HOME`/PATH, and passed `npm run test:security:rules` on 2026-05-05
 
 ## Security (2026-04-24 Audit Complete)
 - [x] **CRITICAL: Audit missing route protections** - Found 4 unprotected pages

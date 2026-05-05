@@ -1,5 +1,6 @@
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { getApp } from "firebase/app";
+import { getClientAuth } from "@/lib/firebase";
 
 function functionsClient() {
   return getFunctions(getApp());
@@ -10,6 +11,53 @@ function toMessage(error, fallback) {
   if (typeof details === "string" && details.trim()) return details;
   if (error?.message) return String(error.message);
   return fallback;
+}
+
+function shouldFallbackToHttp(error) {
+  const code = String(error?.code || "").toLowerCase();
+  const message = String(error?.message || "").toLowerCase();
+  return (
+    code === "functions/unavailable" ||
+    code === "functions/internal" ||
+    message.includes("failed to fetch") ||
+    message.includes("network") ||
+    message.includes("access-control-allow-origin") ||
+    message.includes("preflight") ||
+    message.includes("cors")
+  );
+}
+
+async function submitBookingRatingHttp(payload) {
+  const projectId = String(process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "").trim();
+  if (!projectId) {
+    throw new Error("Missing Firebase project ID for HTTP rating fallback.");
+  }
+
+  const auth = getClientAuth();
+  const currentUser = auth.currentUser;
+  if (!currentUser) {
+    throw new Error("Please login first.");
+  }
+
+  const idToken = await currentUser.getIdToken();
+  const endpoint = `https://us-central1-${projectId}.cloudfunctions.net/submitBookingRatingHttp`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${idToken}`,
+    },
+    body: JSON.stringify(payload || {}),
+  });
+
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = typeof body?.message === "string" && body.message.trim()
+      ? body.message
+      : "Could not submit rating.";
+    throw new Error(message);
+  }
+  return body;
 }
 
 export async function ensureConsumerProfile() {
@@ -94,6 +142,13 @@ export async function submitBookingRating(payload) {
     const result = await callable(payload || {});
     return result.data || null;
   } catch (error) {
+    if (shouldFallbackToHttp(error)) {
+      try {
+        return await submitBookingRatingHttp(payload || {});
+      } catch (httpError) {
+        throw new Error(toMessage(httpError, "Could not submit rating."));
+      }
+    }
     throw new Error(toMessage(error, "Could not submit rating."));
   }
 }

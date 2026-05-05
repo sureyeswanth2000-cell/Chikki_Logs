@@ -82,6 +82,7 @@ const { onCall, HttpsError, onRequest } = require("firebase-functions/v2/https")
 const { onDocumentUpdated } = require("firebase-functions/v2/firestore");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { initializeApp } = require("firebase-admin/app");
+const { getAuth: getAdminAuth } = require("firebase-admin/auth");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const crypto = require("node:crypto");
 const Razorpay = require("razorpay");
@@ -955,6 +956,86 @@ function timestampToMillis(value) {
 
 function normalizeRatingComment(value) {
   return normalizeText(value, 500);
+}
+
+async function submitBookingRatingCore({ userId, bookingId, ratingOverall, ratingComment }) {
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  let bookingCode = bookingId;
+  let nextBedRatingAverage = 0;
+  let nextBedRatingCount = 0;
+
+  await db.runTransaction(async (transaction) => {
+    const bookingSnap = await transaction.get(bookingRef);
+    if (!bookingSnap.exists) {
+      throw new HttpsError("not-found", "Booking not found.");
+    }
+
+    const booking = bookingSnap.data() || {};
+    bookingCode = String(booking.bookingCode ?? bookingId);
+    if (String(booking.userId ?? "") !== userId) {
+      throw new HttpsError("permission-denied", "You can rate only your own booking.");
+    }
+    if (String(booking.bookingStatus ?? "").toLowerCase() !== "completed") {
+      throw new HttpsError("failed-precondition", "Only completed bookings can be rated.");
+    }
+    if (Number(booking.ratingOverall ?? 0) > 0 || booking.ratingSubmittedAt) {
+      throw new HttpsError("already-exists", "This booking has already been rated.");
+    }
+
+    const bedId = String(booking.bedId ?? "").trim();
+    const bedRef = bedId ? db.collection("beds").doc(bedId) : null;
+    const bedSnap = bedRef ? await transaction.get(bedRef) : null;
+    const bed = bedSnap?.exists ? bedSnap.data() || {} : {};
+    const currentCount = Math.max(0, Number(bed.ratingCount ?? 0));
+    const currentAverage = Math.max(0, Number(bed.ratingAverage ?? 0));
+    const currentTotal = Number.isFinite(Number(bed.ratingTotal))
+      ? Number(bed.ratingTotal)
+      : currentAverage * currentCount;
+    const nextTotal = currentTotal + ratingOverall;
+    nextBedRatingCount = currentCount + 1;
+    nextBedRatingAverage = Math.round((nextTotal / nextBedRatingCount) * 10) / 10;
+
+    transaction.update(bookingRef, {
+      ratingOverall,
+      ratingComment,
+      ratingStatus: "submitted",
+      ratingSubmittedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    if (bedRef && bedSnap?.exists) {
+      transaction.set(bedRef, {
+        ratingAverage: nextBedRatingAverage,
+        ratingCount: nextBedRatingCount,
+        ratingTotal: nextTotal,
+        lastRatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: userId,
+      actorRole: "consumer",
+      action: "booking_rated",
+      entityType: "booking",
+      entityId: bookingId,
+      metadata: {
+        bedId,
+        ratingOverall,
+        hasComment: ratingComment.length > 0,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {
+    ok: true,
+    bookingId,
+    bookingCode,
+    ratingOverall,
+    bedRatingAverage: nextBedRatingAverage,
+    bedRatingCount: nextBedRatingCount,
+  };
 }
 
 exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
@@ -2679,83 +2760,71 @@ exports.submitBookingRating = onCall({ cors: true }, async (request) => {
     throw new HttpsError("invalid-argument", "Rating must be between 1 and 5.");
   }
 
-  const bookingRef = db.collection("bookings").doc(bookingId);
-  let bookingCode = bookingId;
-  let nextBedRatingAverage = 0;
-  let nextBedRatingCount = 0;
+  return submitBookingRatingCore({ userId, bookingId, ratingOverall, ratingComment });
+});
 
-  await db.runTransaction(async (transaction) => {
-    const bookingSnap = await transaction.get(bookingRef);
-    if (!bookingSnap.exists) {
-      throw new HttpsError("not-found", "Booking not found.");
+exports.submitBookingRatingHttp = onRequest(async (request, response) => {
+  response.set("Access-Control-Allow-Origin", "*");
+  response.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  response.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+
+  if (request.method === "OPTIONS") {
+    response.status(204).send("");
+    return;
+  }
+
+  if (request.method !== "POST") {
+    response.status(405).json({ error: "method-not-allowed", message: "Use POST." });
+    return;
+  }
+
+  try {
+    const authHeader = String(request.headers.authorization || "");
+    const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
+    if (!idToken) {
+      response.status(401).json({ error: "unauthenticated", message: "Missing Authorization bearer token." });
+      return;
     }
 
-    const booking = bookingSnap.data() || {};
-    bookingCode = String(booking.bookingCode ?? bookingId);
-    if (String(booking.userId ?? "") !== userId) {
-      throw new HttpsError("permission-denied", "You can rate only your own booking.");
-    }
-    if (String(booking.bookingStatus ?? "").toLowerCase() !== "completed") {
-      throw new HttpsError("failed-precondition", "Only completed bookings can be rated.");
-    }
-    if (Number(booking.ratingOverall ?? 0) > 0 || booking.ratingSubmittedAt) {
-      throw new HttpsError("already-exists", "This booking has already been rated.");
+    const decoded = await getAdminAuth().verifyIdToken(idToken);
+    const userId = String(decoded?.uid || "").trim();
+    if (!userId) {
+      response.status(401).json({ error: "unauthenticated", message: "Invalid auth token." });
+      return;
     }
 
-    const bedId = String(booking.bedId ?? "").trim();
-    const bedRef = bedId ? db.collection("beds").doc(bedId) : null;
-    const bedSnap = bedRef ? await transaction.get(bedRef) : null;
-    const bed = bedSnap?.exists ? bedSnap.data() || {} : {};
-    const currentCount = Math.max(0, Number(bed.ratingCount ?? 0));
-    const currentAverage = Math.max(0, Number(bed.ratingAverage ?? 0));
-    const currentTotal = Number.isFinite(Number(bed.ratingTotal))
-      ? Number(bed.ratingTotal)
-      : currentAverage * currentCount;
-    const nextTotal = currentTotal + ratingOverall;
-    nextBedRatingCount = currentCount + 1;
-    nextBedRatingAverage = Math.round((nextTotal / nextBedRatingCount) * 10) / 10;
+    const bookingId = String(request.body?.bookingId ?? "").trim();
+    const ratingOverall = Number(request.body?.ratingOverall ?? 0);
+    const ratingComment = normalizeRatingComment(request.body?.ratingComment ?? "");
 
-    transaction.update(bookingRef, {
-      ratingOverall,
-      ratingComment,
-      ratingStatus: "submitted",
-      ratingSubmittedAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-    });
-
-    if (bedRef && bedSnap?.exists) {
-      transaction.set(bedRef, {
-        ratingAverage: nextBedRatingAverage,
-        ratingCount: nextBedRatingCount,
-        ratingTotal: nextTotal,
-        lastRatedAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
+    if (!bookingId) {
+      response.status(400).json({ error: "invalid-argument", message: "bookingId is required." });
+      return;
+    }
+    if (!Number.isInteger(ratingOverall) || ratingOverall < 1 || ratingOverall > 5) {
+      response.status(400).json({ error: "invalid-argument", message: "Rating must be between 1 and 5." });
+      return;
     }
 
-    transaction.set(db.collection("audit_logs").doc(), {
-      actorUserId: userId,
-      actorRole: "consumer",
-      action: "booking_rated",
-      entityType: "booking",
-      entityId: bookingId,
-      metadata: {
-        bedId,
-        ratingOverall,
-        hasComment: ratingComment.length > 0,
-      },
-      createdAt: FieldValue.serverTimestamp(),
-    });
-  });
+    const result = await submitBookingRatingCore({ userId, bookingId, ratingOverall, ratingComment });
+    response.status(200).json(result);
+  } catch (error) {
+    if (error instanceof HttpsError) {
+      const statusByCode = {
+        "invalid-argument": 400,
+        "failed-precondition": 400,
+        "unauthenticated": 401,
+        "permission-denied": 403,
+        "not-found": 404,
+        "already-exists": 409,
+      };
+      response.status(statusByCode[error.code] || 500).json({ error: error.code, message: error.message });
+      return;
+    }
+    console.error("[submitBookingRatingHttp] failed:", error);
+    response.status(500).json({ error: "internal", message: "Could not submit rating." });
+  }
 
-  return {
-    ok: true,
-    bookingId,
-    bookingCode,
-    ratingOverall,
-    bedRatingAverage: nextBedRatingAverage,
-    bedRatingCount: nextBedRatingCount,
-  };
 });
 
 exports.detectPaymentStatusAnomaly = onDocumentUpdated("payments/{paymentId}", async (event) => {
