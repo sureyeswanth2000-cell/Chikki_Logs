@@ -15,15 +15,6 @@ function currentHref(pathname) {
     return `${pathname || "/"}${window.location.search || ""}`;
 }
 
-function staticHostedBasePath() {
-    if (typeof window === "undefined") return "";
-    const path = window.location.pathname || "";
-    if (path === "/Chikki_Logs" || path.startsWith("/Chikki_Logs/")) {
-        return "/Chikki_Logs";
-    }
-    return "";
-}
-
 function hardRedirect(path) {
     if (typeof window === "undefined") return false;
     const [rawPathname, query = ""] = String(path || "").split("?");
@@ -31,11 +22,7 @@ function hardRedirect(path) {
         ? `${rawPathname}/`
         : (rawPathname || "/");
     const normalizedPath = query ? `${pathname}?${query}` : pathname;
-    const basePath = staticHostedBasePath();
-    const destination = basePath && !normalizedPath.startsWith(basePath)
-        ? `${basePath}${normalizedPath}`
-        : normalizedPath;
-    window.location.replace(destination);
+    window.location.replace(normalizedPath);
     return true;
 }
 
