@@ -7,6 +7,7 @@ export const COLLECTIONS = {
     beds: "beds",
     bedBlocks: "bed_blocks",
     bedLocks: "bed_locks",
+    bedIssueReports: "bed_issue_reports",
     bookingAvailability: "booking_availability",
     bookings: "bookings",
     payments: "payments",

@@ -256,8 +256,8 @@ function ProfileContent() {
                         />
                         <FormField
                             id="aadhaar"
-                            label="Aadhaar Number"
-                            placeholder={profile?.hasAadhaar ? "Enter new 12-digit Aadhaar to replace saved value" : "12-digit Aadhaar number"}
+                            label="Aadhaar Number (optional)"
+                            placeholder={profile?.hasAadhaar ? "Enter new 12-digit Aadhaar to replace saved value" : "12-digit Aadhaar number (optional)"}
                             value={form.aadhaar}
                             onChange={handleChange}
                             maxLength={12}

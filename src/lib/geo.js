@@ -30,6 +30,57 @@ export function formatDistance(km) {
   return `${value.toFixed(value < 10 ? 1 : 0)} km`;
 }
 
+const NEAR_TRANSIT_LIMIT_KM = 2;
+
+function transitLabel(type, name) {
+  const cleanName = String(name ?? "").trim();
+  if (type === "railway") {
+    return cleanName ? `${cleanName} railway station` : "Railway station";
+  }
+  return cleanName ? `${cleanName} bus stand` : "Bus stand";
+}
+
+export function getTransitDisplayItems(source, nearLimitKm = NEAR_TRANSIT_LIMIT_KM) {
+  const items = [
+    {
+      type: "railway",
+      name: String(source?.nearRailwayName ?? "").trim(),
+      distanceKm: Number(source?.nearRailwayKm),
+    },
+    {
+      type: "bus",
+      name: String(source?.nearBusName ?? "").trim(),
+      distanceKm: Number(source?.nearBusKm),
+    },
+  ]
+    .filter((item) => Number.isFinite(item.distanceKm) && item.distanceKm > 0)
+    .sort((a, b) => a.distanceKm - b.distanceKm);
+
+  if (items.length <= 1) {
+    return items.map((item) => ({
+      ...item,
+      label: transitLabel(item.type, item.name),
+      formattedDistance: formatDistance(item.distanceKm),
+    }));
+  }
+
+  const nearbyItems = items.filter((item) => item.distanceKm <= nearLimitKm);
+  const displayItems = nearbyItems.length > 0 ? [nearbyItems[0]] : items;
+  return displayItems.map((item) => ({
+    ...item,
+    label: transitLabel(item.type, item.name),
+    formattedDistance: formatDistance(item.distanceKm),
+  }));
+}
+
+export function formatTransitSummary(source) {
+  const items = getTransitDisplayItems(source);
+  if (items.length === 0) {
+    return "Transit distance not available";
+  }
+  return items.map((item) => `${item.label}: ${item.formattedDistance}`).join(" | ");
+}
+
 export function findNearestCity(cities, location) {
   const candidates = (Array.isArray(cities) ? cities : [])
     .map((city) => {

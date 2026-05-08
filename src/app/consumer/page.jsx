@@ -1,5 +1,5 @@
 "use client";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
@@ -10,8 +10,10 @@ import {
     getActiveCities,
     getListingsByCity,
     getOpenConsumerBookings,
+    modifyConfirmedBooking,
+    reportBedIssue,
 } from "@/lib/firestore/consumer";
-import { formatDistance, googleMapsDirectionsUrl } from "@/lib/geo";
+import { formatDistance, formatTransitSummary, googleMapsDirectionsUrl } from "@/lib/geo";
 
 function getElapsedHours(checkInAt) {
     const checkInMs = new Date(checkInAt).getTime();
@@ -34,6 +36,107 @@ function readLocation(latValue, lngValue) {
         return null;
     }
     return { lat, lng };
+}
+
+function pad2(value) {
+    return String(value).padStart(2, "0");
+}
+
+function toInputDateTime(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function dateTimeInputValue(value) {
+    const text = String(value ?? "");
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(text)) {
+        return text.slice(0, 16);
+    }
+    const date = new Date(text);
+    if (Number.isNaN(date.getTime())) {
+        return toInputDateTime(new Date());
+    }
+    return toInputDateTime(date);
+}
+
+function maxModifyTimeForMode(mode) {
+    const max = new Date();
+    if (String(mode ?? "").toLowerCase() === "future") {
+        max.setDate(max.getDate() + 30);
+    } else {
+        max.setHours(max.getHours() + 24);
+    }
+    return toInputDateTime(max);
+}
+
+function isLocalDevUser(user) {
+    return String(user?.uid ?? "").startsWith("dev-");
+}
+
+function buildLocalDevListing({ cityName, duration }) {
+    const price = duration === "overnight" ? 650 : duration === "overday" ? 900 : 120;
+    return {
+        propertyId: "dev-smoke-property",
+        propertyName: "Dev Smoke Beds",
+        cityName: cityName || "Local City",
+        exactAddress: "Local development preview only",
+        lat: 14.91394,
+        lng: 79.97984,
+        nearestTransitType: "railway",
+        nearestTransitName: "Local Railway Station",
+        nearestTransitKm: 0.12,
+        distanceFromUserKm: 0.001,
+        shownAvailableBeds: 2,
+        availableBeds: 2,
+        acBeds: 1,
+        nonAcBeds: 1,
+        scarcityApplied: false,
+        demandActive: false,
+        demandWarningActive: false,
+        minFinalPrice: price,
+        minHourlyPrice: 120,
+        minOvernightPrice: 650,
+        platformFeeInr: 9,
+        ratingAverage: 4.8,
+        ratingCount: 12,
+        recommendedBedId: "dev-smoke-bed",
+        recommendedBedCode: "SMK-1",
+        recommendedBedType: "NON_AC",
+        recommendedBedPrice: price,
+        recommendedBedRatingAverage: 4.8,
+        recommendedBedRatingCount: 12,
+    };
+}
+
+function buildLocalDevOpenBooking() {
+    const now = new Date();
+    now.setMinutes(now.getMinutes() - 20);
+    return {
+        id: "dev-open-booking",
+        bookingCode: "DEV-OPEN-1",
+        propertyId: "dev-smoke-property",
+        propertyName: "Dev Smoke Beds",
+        roomId: "dev-room-1",
+        roomName: "101",
+        bedId: "dev-smoke-bed",
+        bedCode: "SMK-1",
+        bedType: "NON_AC",
+        checkInAt: now.toISOString().slice(0, 16),
+        bookingStatus: "checked_in",
+        bookingMode: "now",
+        bookingModeLabel: "Book Now",
+        modifiedCount: 0,
+        totalAmount: 129,
+        bedAmount: 120,
+        platformFeeAmount: 9,
+        bedIssueStatus: "",
+        canModify: false,
+        canCheckIn: false,
+        canReportBedIssue: true,
+        bedOptions: [
+            { bedId: "dev-smoke-bed", bedCode: "SMK-1", bedType: "NON_AC", roomName: "101" },
+            { bedId: "dev-smoke-bed-2", bedCode: "SMK-2", bedType: "AC", roomName: "101" },
+        ],
+    };
 }
 
 async function ensureRazorpayLoaded() {
@@ -66,7 +169,7 @@ async function openRazorpayCheckout(options) {
 function ConsumerContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const { profile, user } = useAuth();
+    const { loading: authLoading, profile, user } = useAuth();
     const [cities, setCities] = useState([]);
     const [loadingCities, setLoadingCities] = useState(true);
     const [loadingListings, setLoadingListings] = useState(false);
@@ -84,14 +187,21 @@ function ConsumerContent() {
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
     const [checkoutLoadingId, setCheckoutLoadingId] = useState("");
     const [checkoutPaymentMethodByBooking, setCheckoutPaymentMethodByBooking] = useState({});
+    const [modifyingBookingId, setModifyingBookingId] = useState("");
+    const [modifyDrafts, setModifyDrafts] = useState({});
+    const [modifyLoadingId, setModifyLoadingId] = useState("");
+    const [issueReportingId, setIssueReportingId] = useState("");
+    const [issueDrafts, setIssueDrafts] = useState({});
+    const [issueLoadingId, setIssueLoadingId] = useState("");
     const [aadhaarBannerDismissed, setAadhaarBannerDismissed] = useState(false);
     const initialSearchAppliedRef = useRef(false);
 
+    const isDevLocalUser = useMemo(() => isLocalDevUser(user), [user]);
     const selectedCityName = useMemo(() => cities.find((item) => item.id === cityId)?.name ?? "", [cities, cityId]);
 
     const loadOpenBookings = useCallback(async () => {
-        if (!user?.uid) {
-            setOpenBookings([]);
+        if (!user?.uid || isDevLocalUser) {
+            setOpenBookings(isDevLocalUser ? [buildLocalDevOpenBooking()] : []);
             return;
         }
         setLoadingOpenBookings(true);
@@ -101,7 +211,7 @@ function ConsumerContent() {
         } finally {
             setLoadingOpenBookings(false);
         }
-    }, [user?.uid]);
+    }, [isDevLocalUser, user?.uid]);
 
     const runSearch = useCallback(async (
         nextCityId = cityId,
@@ -137,11 +247,16 @@ function ConsumerContent() {
                 setNotice("Listings are sorted by nearest property from your current location.");
             }
         } catch (searchError) {
+            if (isDevLocalUser) {
+                setListings([buildLocalDevListing({ cityName: selectedCityName, duration: nextDuration })]);
+                setNotice("Local smoke preview shown because live Firestore access is not available for the dev auth bypass.");
+                return;
+            }
             setError(searchError instanceof Error ? searchError.message : "Failed to load listings.");
         } finally {
             setLoadingListings(false);
         }
-    }, [bedFilter, cityId, duration, maxFinalPrice, nearMeEnabled, userLocation]);
+    }, [bedFilter, cityId, duration, isDevLocalUser, maxFinalPrice, nearMeEnabled, selectedCityName, userLocation]);
 
     useEffect(() => {
         async function loadCities() {
@@ -160,6 +275,9 @@ function ConsumerContent() {
     }, []);
 
     useEffect(() => {
+        if (authLoading) {
+            return;
+        }
         if (initialSearchAppliedRef.current) {
             return;
         }
@@ -183,7 +301,7 @@ function ConsumerContent() {
             setUserLocation(initialLocation);
             void runSearch(initialCityId, effectiveDuration, effectiveBedFilter, maxFinalPrice, initialLocation, Boolean(initialNearMe && initialLocation));
         }
-    }, [bedFilter, duration, maxFinalPrice, runSearch, searchParams]);
+    }, [authLoading, bedFilter, duration, maxFinalPrice, runSearch, searchParams]);
 
     useEffect(() => {
         void loadOpenBookings();
@@ -194,17 +312,26 @@ function ConsumerContent() {
         await runSearch();
     }
 
-    function openBookingPage(listing) {
+    function openBookingPage(listing, mode = "manual") {
         const params = new URLSearchParams({
             cityId: cityId || "",
             propertyId: listing.propertyId || "",
+            propertyName: listing.propertyName || "",
+            mode,
             duration,
             bedFilter,
         });
+        if ((mode === "now" || mode === "future") && listing.recommendedBedId) {
+            params.set("bedId", listing.recommendedBedId);
+        }
         if (nearMeEnabled && userLocation) {
             params.set("nearMe", "1");
             params.set("userLat", String(userLocation.lat));
             params.set("userLng", String(userLocation.lng));
+        }
+        if (isDevLocalUser) {
+            params.set("devAuth", profile?.role || "consumer");
+            params.set("devPreview", "1");
         }
         const bookingPath = `/booking?${params.toString()}`;
         if (!user?.uid) {
@@ -295,6 +422,117 @@ function ConsumerContent() {
         }
     }
 
+    function startModifyBooking(item) {
+        setError(null);
+        setNotice(null);
+        setModifyingBookingId(item.id);
+        setModifyDrafts((current) => ({
+            ...current,
+            [item.id]: {
+                checkInAt: current[item.id]?.checkInAt ?? dateTimeInputValue(item.checkInAt),
+                bedId: current[item.id]?.bedId ?? item.bedId,
+            },
+        }));
+    }
+
+    function updateModifyDraft(bookingId, field, value) {
+        setModifyDrafts((current) => ({
+            ...current,
+            [bookingId]: {
+                checkInAt: current[bookingId]?.checkInAt ?? "",
+                bedId: current[bookingId]?.bedId ?? "",
+                [field]: value,
+            },
+        }));
+    }
+
+    async function handleModifyBooking(event, item) {
+        event.preventDefault();
+        if (!user?.uid) return;
+        const draft = modifyDrafts[item.id] ?? {};
+        setModifyLoadingId(item.id);
+        setError(null);
+        setNotice(null);
+        try {
+            const summary = await modifyConfirmedBooking({
+                bookingId: item.id,
+                checkInAt: draft.checkInAt,
+                bedId: draft.bedId || item.bedId,
+            });
+            setNotice(
+                `Booking modified. ${summary.bookingCode}: ${summary.allocatedBedCode || "bed"} at ${summary.checkInAt}. `
+                + `Locked total: INR ${Math.round(Number(summary.totalAmount ?? 0)).toLocaleString("en-IN")}.`
+            );
+            setModifyingBookingId("");
+            await loadOpenBookings();
+        } catch (modifyError) {
+            setError(modifyError instanceof Error ? modifyError.message : "Could not modify booking.");
+        } finally {
+            setModifyLoadingId("");
+        }
+    }
+
+    function startIssueReport(item) {
+        setError(null);
+        setNotice(null);
+        setIssueReportingId(item.id);
+        setIssueDrafts((current) => ({
+            ...current,
+            [item.id]: {
+                reason: current[item.id]?.reason ?? "unclean",
+                notes: current[item.id]?.notes ?? "",
+            },
+        }));
+    }
+
+    function updateIssueDraft(bookingId, field, value) {
+        setIssueDrafts((current) => ({
+            ...current,
+            [bookingId]: {
+                reason: current[bookingId]?.reason ?? "unclean",
+                notes: current[bookingId]?.notes ?? "",
+                [field]: value,
+            },
+        }));
+    }
+
+    async function handleReportBedIssue(event, item) {
+        event.preventDefault();
+        if (!user?.uid) return;
+        const draft = issueDrafts[item.id] ?? {};
+        setIssueLoadingId(item.id);
+        setError(null);
+        setNotice(null);
+        try {
+            if (isDevLocalUser) {
+                setNotice("Local smoke preview: issue recorded and consumer would be moved to SMK-2 in the same property.");
+                setOpenBookings((current) => current.map((booking) => booking.id === item.id
+                    ? {
+                        ...booking,
+                        bedId: "dev-smoke-bed-2",
+                        bedCode: "SMK-2",
+                        bedType: "AC",
+                        bedIssueStatus: "reassigned",
+                    }
+                    : booking));
+                setIssueReportingId("");
+                return;
+            }
+            const summary = await reportBedIssue({
+                bookingId: item.id,
+                reason: draft.reason || "other",
+                notes: draft.notes || "",
+            });
+            setNotice(summary.message || "Bed issue reported. Support has been notified.");
+            setIssueReportingId("");
+            await loadOpenBookings();
+        } catch (issueError) {
+            setError(issueError instanceof Error ? issueError.message : "Could not report bed issue.");
+        } finally {
+            setIssueLoadingId("");
+        }
+    }
+
     async function handleCopyBookingId(bookingCode, fallbackId) {
         const value = String(bookingCode || fallbackId || "").trim();
         if (!value) return;
@@ -323,9 +561,9 @@ function ConsumerContent() {
               <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                 <span className="mt-0.5 shrink-0 text-base">&#x1F4CB;</span>
                 <div className="flex-1">
-                  <strong>Add your Aadhaar before your next booking</strong>
+                  <strong>Add Aadhaar if you want faster repeat booking</strong>
                   <p className="mt-1 text-xs text-amber-700">
-                    Aadhaar verification is required to keep booking beds. Add it now from your profile.
+                    Aadhaar is optional for booking right now. If you want to save it for later use, add it from your profile.
                   </p>
                   <div className="mt-2 flex gap-2">
                     <a
@@ -395,7 +633,7 @@ function ConsumerContent() {
                         <article key={item.propertyId} className="animate-list-item rounded-xl border border-slate-200 bg-white/80 p-4 transition hover:-translate-y-0.5 hover:border-sky-200">
                             <h3 className="text-lg font-semibold">{item.propertyName}</h3>
                             <p className="mt-1 text-sm text-slate-600">{item.exactAddress}</p>
-                            <p className="mt-1 text-sm text-slate-600">Near Railway: {formatDistance(item.nearRailwayKm) || "-"} | Near Bus Stand: {formatDistance(item.nearBusKm) || "-"}</p>
+                            <p className="mt-1 text-sm text-slate-600">{formatTransitSummary(item)}</p>
                             {Number.isFinite(Number(item.distanceFromUserKm)) ? (
                                 <p className="mt-1 text-sm font-semibold text-sky-700">Distance from you: {formatDistance(item.distanceFromUserKm)}</p>
                             ) : null}
@@ -417,11 +655,24 @@ function ConsumerContent() {
                             <p className="mt-2 text-sm font-semibold text-slate-900">Hourly from INR {item.minHourlyPrice} | Overnight from INR {item.minOvernightPrice}</p>
                             <p className="mt-1 text-xs text-slate-500">Shown rates are bed prices. Platform fee (INR {item.platformFeeInr ?? 9}) is added once per booking at checkout.</p>
                             <p className="mt-1 text-xs font-semibold text-slate-600">Bed rating: {ratingText(item.ratingAverage, item.ratingCount)}</p>
+                            {item.recommendedBedId ? (
+                                <div className="mt-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                                    <span className="font-bold">Recommended:</span>{" "}
+                                    {item.recommendedBedCode || "Bed"} | {item.recommendedBedType || "Bed"} | INR {item.recommendedBedPrice}
+                                    <span className="ml-1 text-sky-700">({ratingText(item.recommendedBedRatingAverage, item.recommendedBedRatingCount)})</span>
+                                </div>
+                            ) : null}
                             <p className="mt-1 text-xs text-slate-500">Checkout uses the booking-time locked bed rate for actual stay hours.</p>
                             <div className="mt-3 flex gap-2">
                                 <a href={googleMapsDirectionsUrl({ lat: item.lat, lng: item.lng }, nearMeEnabled ? userLocation : null)} target="_blank" rel="noreferrer" className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">Directions</a>
-                                <button type="button" onClick={() => openBookingPage(item)} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
-                                    {user ? "Book This" : "Login To Book"}
+                                <button type="button" onClick={() => openBookingPage(item, "now")} className="rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white transition hover:bg-slate-700">
+                                    {user ? "Book Now" : "Login To Book"}
+                                </button>
+                                <button type="button" onClick={() => openBookingPage(item, "future")} className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-50">
+                                    Future Booking
+                                </button>
+                                <button type="button" onClick={() => openBookingPage(item, "manual")} className="rounded-full border border-slate-300 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
+                                    Choose Bed
                                 </button>
                             </div>
                         </article>
@@ -446,15 +697,18 @@ function ConsumerContent() {
                                         <th className="pb-2 text-left font-semibold">Property</th>
                                         <th className="pb-2 text-left font-semibold">Room</th>
                                         <th className="pb-2 text-left font-semibold">Bed</th>
+                                        <th className="pb-2 text-left font-semibold">Type</th>
                                         <th className="pb-2 text-left font-semibold">Check-In</th>
                                         <th className="pb-2 text-left font-semibold">Status</th>
+                                        <th className="pb-2 text-left font-semibold">Locked Total</th>
                                         <th className="pb-2 text-left font-semibold">Live Hours</th>
                                         <th className="pb-2 text-left font-semibold">Action</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-100">
                                     {openBookings.map((item) => (
-                                        <tr key={item.id}>
+                                        <Fragment key={item.id}>
+                                        <tr>
                                             <td className="py-2 font-mono text-xs text-slate-700">
                                                 <div className="flex items-center gap-2">
                                                     <span>{item.bookingCode || item.id}</span>
@@ -470,23 +724,51 @@ function ConsumerContent() {
                                             <td className="py-2 text-slate-700">{item.propertyName || "-"}</td>
                                             <td className="py-2 text-slate-700">{item.roomName || "-"}</td>
                                             <td className="py-2 text-slate-700">{item.bedCode || "-"}</td>
+                                            <td className="py-2">
+                                                <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${String(item.bookingMode).toLowerCase() === "future" ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-700"}`}>
+                                                    {item.bookingModeLabel || "Book Now"}
+                                                </span>
+                                                {String(item.bookingMode).toLowerCase() === "future" && Number(item.futureBookingSurchargePercent ?? 0) > 0 ? (
+                                                    <p className="mt-1 text-[11px] text-slate-500">Future price locked</p>
+                                                ) : null}
+                                                {Number(item.modifiedCount ?? 0) > 0 ? (
+                                                    <p className="mt-1 text-[11px] font-semibold text-sky-700">Modified</p>
+                                                ) : null}
+                                                {item.bedIssueStatus ? (
+                                                    <p className="mt-1 text-[11px] font-semibold text-amber-700">Bed issue reported</p>
+                                                ) : null}
+                                            </td>
                                             <td className="py-2 text-slate-700">{item.checkInAt || "-"}</td>
                                             <td className="py-2">
                                                 <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${String(item.bookingStatus).toLowerCase() === "checked_in" ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>
                                                     {String(item.bookingStatus).toLowerCase() === "checked_in" ? "Checked In" : "Booked"}
                                                 </span>
                                             </td>
+                                            <td className="py-2 text-slate-700">
+                                                {Number(item.totalAmount ?? 0) > 0 ? `INR ${Math.round(Number(item.totalAmount)).toLocaleString("en-IN")}` : "-"}
+                                            </td>
                                             <td className="py-2 text-slate-700">{getElapsedHours(item.checkInAt)} hr</td>
                                             <td className="py-2">
                                                 {String(item.bookingStatus).toLowerCase() === "confirmed" ? (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleCheckInBooking(item.id)}
-                                                        disabled={!item.canCheckIn || checkInLoadingId === item.id}
-                                                        className="rounded-full border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
-                                                    >
-                                                        {checkInLoadingId === item.id ? "Checking in..." : (item.canCheckIn ? "Check-In" : "Wait for time")}
-                                                    </button>
+                                                    <div className="flex flex-col gap-1">
+                                                        {item.canModify ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => startModifyBooking(item)}
+                                                                className="rounded-full border border-sky-300 px-3 py-1 text-xs font-semibold text-sky-700 hover:bg-sky-50"
+                                                            >
+                                                                Modify
+                                                            </button>
+                                                        ) : null}
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void handleCheckInBooking(item.id)}
+                                                            disabled={!item.canCheckIn || checkInLoadingId === item.id}
+                                                            className="rounded-full border border-emerald-300 px-3 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                                                        >
+                                                            {checkInLoadingId === item.id ? "Checking in..." : (item.canCheckIn ? "Check-In" : "Wait for time")}
+                                                        </button>
+                                                    </div>
                                                 ) : (
                                                     <div className="flex flex-col gap-1">
                                                         <div className="flex items-center gap-2">
@@ -517,10 +799,121 @@ function ConsumerContent() {
                                                         >
                                                             {checkoutLoadingId === item.id ? "Checking out..." : "Checkout"}
                                                         </button>
+                                                        {item.canReportBedIssue ? (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => startIssueReport(item)}
+                                                                className="rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50"
+                                                            >
+                                                                Report Bed Issue
+                                                            </button>
+                                                        ) : null}
                                                     </div>
                                                 )}
                                             </td>
                                         </tr>
+                                        {modifyingBookingId === item.id ? (
+                                            <tr className="bg-sky-50/60">
+                                                <td colSpan={10} className="px-3 py-4">
+                                                    <form className="grid gap-3 md:grid-cols-[1fr_1fr_auto_auto]" onSubmit={(event) => void handleModifyBooking(event, item)}>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">New Check-In</label>
+                                                            <input
+                                                                type="datetime-local"
+                                                                min={toInputDateTime(new Date())}
+                                                                max={maxModifyTimeForMode(item.bookingMode)}
+                                                                value={modifyDrafts[item.id]?.checkInAt ?? dateTimeInputValue(item.checkInAt)}
+                                                                onChange={(event) => updateModifyDraft(item.id, "checkInAt", event.target.value)}
+                                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500"
+                                                                required
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Bed In Same Property</label>
+                                                            <select
+                                                                value={modifyDrafts[item.id]?.bedId ?? item.bedId}
+                                                                onChange={(event) => updateModifyDraft(item.id, "bedId", event.target.value)}
+                                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-sky-500"
+                                                            >
+                                                                {(item.bedOptions ?? []).map((bed) => (
+                                                                    <option key={bed.bedId} value={bed.bedId}>
+                                                                        {bed.bedCode || "Bed"} | {bed.bedType} | {bed.roomName || bed.roomId || "Room"}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                        <button
+                                                            type="submit"
+                                                            disabled={modifyLoadingId === item.id}
+                                                            className="self-end rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:opacity-60"
+                                                        >
+                                                            {modifyLoadingId === item.id ? "Saving..." : "Save Changes"}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setModifyingBookingId("")}
+                                                            className="self-end rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white"
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                    </form>
+                                                    <p className="mt-2 text-xs text-slate-500">
+                                                        Price and availability are checked again when you save. Booking type stays {item.bookingModeLabel || "Book Now"}.
+                                                    </p>
+                                                </td>
+                                            </tr>
+                                        ) : null}
+                                        {issueReportingId === item.id ? (
+                                            <tr className="bg-amber-50/70">
+                                                <td colSpan={10} className="px-3 py-4">
+                                                    <form className="grid gap-3 md:grid-cols-[220px_1fr_auto_auto]" onSubmit={(event) => void handleReportBedIssue(event, item)}>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Issue</label>
+                                                            <select
+                                                                value={issueDrafts[item.id]?.reason ?? "unclean"}
+                                                                onChange={(event) => updateIssueDraft(item.id, "reason", event.target.value)}
+                                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500"
+                                                            >
+                                                                <option value="unclean">Unclean bed</option>
+                                                                <option value="damaged">Damaged bed</option>
+                                                                <option value="occupied">Already occupied</option>
+                                                                <option value="unsafe">Unsafe/uncomfortable</option>
+                                                                <option value="wrong_bed">Wrong bed</option>
+                                                                <option value="other">Other</option>
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</label>
+                                                            <input
+                                                                value={issueDrafts[item.id]?.notes ?? ""}
+                                                                onChange={(event) => updateIssueDraft(item.id, "notes", event.target.value)}
+                                                                maxLength={500}
+                                                                placeholder="Short note for owner/operator"
+                                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500"
+                                                            />
+                                                        </div>
+                                                        <button
+                                                            type="submit"
+                                                            disabled={issueLoadingId === item.id}
+                                                            className="self-end rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                                                        >
+                                                            {issueLoadingId === item.id ? "Reporting..." : "Report"}
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setIssueReportingId("")}
+                                                            className="self-end rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-white"
+                                                        >
+                                                            Cancel
+                                                        </button>
+                                                    </form>
+                                                    <p className="mt-2 text-xs text-slate-500">
+                                                        We try another available bed in the same property first. If none is available, we try a nearby property and alert support.
+                                                    </p>
+                                                </td>
+                                            </tr>
+                                        ) : null}
+                                        </Fragment>
                                     ))}
                                 </tbody>
                             </table>

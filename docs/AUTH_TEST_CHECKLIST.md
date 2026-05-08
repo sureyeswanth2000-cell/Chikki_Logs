@@ -73,6 +73,40 @@ Before testing:
 - use the back button after an unauthorized redirect and confirm the user does not get trapped
 - repeat one direct-URL test after logout to make sure stale sessions do not leak access
 
+## Permission Smoke Test
+Run this with the browser console open for each role. The pass condition is: no page shows "Missing or insufficient permissions" in the UI and no repeated Firestore `permission-denied` console noise appears on allowed pages.
+
+- Guest:
+  - open `/`
+  - open `/login`
+  - open `/register`
+  - open `/support`
+  - directly open `/consumer` and confirm redirect behavior is intentional
+- Consumer:
+  - open `/consumer`
+  - search listings in a city with properties
+  - open `/booking` from a listing
+  - open `/history`
+  - open `/profile`
+  - open `/apply-owner`
+- Owner:
+  - open `/owner`
+  - open `/owner/properties`
+  - open `/owner/rooms`
+  - open `/owner/beds`
+  - open `/owner/property-status`
+  - open `/owner/earnings`
+  - open `/history`
+  - open `/profile`
+- Operator:
+  - open `/operator`
+  - load owner applications, city list, settings, commission dues, demand pricing, and role-change history
+  - open `/profile`
+- Superadmin:
+  - open `/internal-control`
+  - load overview, growth, city management, platform settings, owner applications, demand pricing, role tools, and Aadhaar investigation tools
+  - open `/profile`
+
 ## Record Results
 After testing, update:
 - `docs/TODO.md` with any remaining failures

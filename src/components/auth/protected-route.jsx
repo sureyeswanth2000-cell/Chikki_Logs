@@ -26,6 +26,11 @@ function hardRedirect(path) {
     return true;
 }
 
+function isAccountInactive(profile) {
+    const status = String(profile?.accountStatus ?? profile?.status ?? "active").toLowerCase();
+    return status === "inactive" || status === "disabled" || status === "deleted";
+}
+
 export function ProtectedRoute({ children, allowedRoles }) {
     const { loading, user, profile } = useAuth();
     const pathname = usePathname();
@@ -51,7 +56,7 @@ export function ProtectedRoute({ children, allowedRoles }) {
 
     useEffect(() => {
         if (!profileTimeout) return;
-        if (!profile || !allowedRoles.includes(profile.role)) {
+        if (!profile || !allowedRoles.includes(profile.role) || isAccountInactive(profile)) {
             const currentPath = currentHref(pathname);
             const destination = unauthorizedHref(currentPath);
             if (!hardRedirect(destination)) {
@@ -61,7 +66,7 @@ export function ProtectedRoute({ children, allowedRoles }) {
     }, [profileTimeout, profile, allowedRoles, pathname, router]);
 
     useEffect(() => {
-        if (!loading && user && profile && !allowedRoles.includes(profile.role)) {
+        if (!loading && user && profile && (!allowedRoles.includes(profile.role) || isAccountInactive(profile))) {
             const currentPath = currentHref(pathname);
             const destination = unauthorizedHref(currentPath);
             if (!hardRedirect(destination)) {
@@ -87,7 +92,7 @@ export function ProtectedRoute({ children, allowedRoles }) {
             </main>);
     }
 
-    if (!allowedRoles.includes(profile.role)) {
+    if (!allowedRoles.includes(profile.role) || isAccountInactive(profile)) {
         return null;
     }
     return <>{children}</>;

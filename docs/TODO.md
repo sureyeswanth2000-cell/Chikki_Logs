@@ -9,18 +9,44 @@
 - [x] "Book This" opens a dedicated `/booking` step where bed selection and start time happen before review/identity confirmation.
 - [x] First booking should collect only the start time.
 - [x] End time is optional during booking and can be resolved at checkout.
-- [x] Advance booking is limited to the next 24 hours.
+- [x] Book Now check-in is limited to the next 24 hours.
+- [x] Future Booking check-in is limited to the next 30 days.
+- [x] Future Booking adds a 10% final bed price surcharge for now; consumer sees only the final price labeled "Future booking price."
+- [x] Backend locks the booking price at confirmation, including Future Booking surcharge and High Demand where applicable.
 - [x] Checkout should show start time, end time, total time spent, and final amount due.
 - [x] If the consumer spends less than 15 minutes, cancel the booking without payment.
 - [x] If the consumer spends 15 minutes or more but less than 60 minutes, charge one full hour.
 - [x] Payment should be collected at checkout.
 - [x] Completed bookings can be rated once from booking history; the rating stays on the booking record.
 - [x] Bed rating averages/counts should be visible during listing search and exact bed selection.
-- [x] Aadhaar should be required from the second booking onward.
-- [x] After the first booking completes, show a home-screen popup asking the consumer to add Aadhaar before the next booking.
+- [x] Aadhaar should stay optional during booking; if the consumer wants to save it, show a friendly add-Aadhaar prompt in booking/profile instead of blocking checkout.
+- [x] After the first booking completes, show a home-screen popup that lets the consumer add Aadhaar later for repeat-booking convenience.
 - [ ] Future train tracking should accept train number or PNR number and notify the consumer like an alarm when the train is nearby.
 - [ ] Future Aadhaar verification should use a third-party verification provider.
 - [x] This spec supersedes the older booking-flow wording lower in the file.
+
+## On Demand Logic
+- [x] Initial search should apply URL filters before fetching listings.
+- [x] Check-in minimum should refresh over time instead of staying frozen at page load.
+- [x] Home-page pricing should show both hourly and overnight prices instead of collapsing to one derived price.
+- [x] Checkout should cancel stays under 15 minutes without payment.
+- [x] Checkout should charge one full hour for stays from 15 minutes up to less than 60 minutes.
+- [x] The 30-second OTP resend flow should stay disabled until the timer ends.
+
+## Ethical Engagement / Rewards
+- [ ] Design an ethical intermittent-reward system that gives users occasional pleasant surprises tied to real value, without hiding prices, creating addiction loops, or pressuring unsafe bookings.
+- [ ] Add occasional wallet cashback surprises after successful checkout only; rewards should be non-withdrawable, usable only for future bed bookings, auditable, capped, and rate-limited.
+- [ ] Add milestone rewards for useful actions like first completed stay, verified Aadhaar/profile completion, repeated clean checkout behavior, and helpful ratings.
+- [ ] Add small randomized upgrade-style rewards only when inventory allows, such as premium-bed discount, AC upgrade offer, or platform-fee waiver, without reducing owner payout unexpectedly.
+- [ ] Add "mystery benefit" campaign support controlled by superadmin with clear rules, expiry, budget cap, per-user limits, and abuse prevention.
+- [ ] Add loyalty tiers for completed stays and clean checkout behavior, such as Bronze/Silver/Gold traveler benefits.
+- [ ] Add progress indicators for real benefits, such as "2 completed stays away from lower platform fee" or "complete profile to unlock wallet benefits."
+- [ ] Add comeback rewards for inactive users, such as wallet credit after a successful return booking, with clear expiry and usage rules.
+- [ ] Add truthful social-proof messaging only when backed by real data, such as recent bookings near the selected station or verified ratings count.
+- [ ] Add train-delay/rest prompts that connect real train approach/delay context to nearby bed availability and valid wallet benefits.
+- [ ] Add post-checkout engagement loop: show receipt, ask for rating, optionally grant wallet reward, and suggest next useful action.
+- [ ] Do not use dark-pattern urgency, fake scarcity, misleading countdowns, hidden fees, or rewards that encourage unnecessary bookings.
+- [ ] Document growth anti-patterns to avoid: fake scarcity, fake countdown timers, hidden fees, fake social proof, bait pricing, over-notification, forced streaks, confusing cancellation rules, and hard-to-exit flows.
 
 ## Auth Verification Runbook
 - [x] Use [docs/AUTH_TEST_CHECKLIST.md](./AUTH_TEST_CHECKLIST.md) as the step-by-step method for end-to-end auth checks
@@ -33,6 +59,11 @@
 - [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
 - [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise — rechecked after additional route-level prefetch suppression + protected-route redirect hardening on 2026-05-05; repeated `__next.*.__PAGE__.txt?_rsc` 404 responses still present in production
 - [x] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally — installed Temurin JDK 21, configured `JAVA_HOME`/PATH, and passed `npm run test:security:rules` on 2026-05-05
+- [x] Fix consumer listing permission-denied noise: do not read `platform_settings/main` or owner `users/{ownerId}` directly from consumer pages; use public-safe listing settings/fields instead
+- [x] Add security-rules query tests for real page-level flows, not only single-doc reads, so permission bugs are caught before production
+- [x] Add role-by-role browser smoke test for guest, consumer, owner, operator, and superadmin to identify pages showing "Missing or insufficient permissions"
+- [x] Allow guest/consumer pre-login listing browse with public-safe active property, room, bed, bed-block, booking-availability, and demand-pricing reads; booking/payment/user docs stay protected
+- [ ] Run the new role-by-role browser permission smoke test manually in production and record any remaining failures
 
 ## Security (2026-04-24 Audit Complete)
 - [x] **CRITICAL: Audit missing route protections** - Found 4 unprotected pages
@@ -82,8 +113,18 @@
 - [x] Move Aadhaar collection to a separate step/page in the booking flow — do not show it inline on the consumer listing page
 - [x] Allow consumers to rate a bed after checkout — add a post-checkout rating prompt in booking history
 - [x] Add full location-to-listing flow using automatic nearest-city or nearest-property logic
-- [ ] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
-- [ ] Add missing modify-booking option for existing bookings so consumers can change booking timing/details after creation when allowed by booking rules
+- [x] Improve listing transit display: show the nearest relevant railway station or bus stand when one is close; show both railway and bus distances when neither is clearly near
+- [x] Investigate and speed up the "Book This" action from listing cards; it currently takes too long before opening the dedicated booking step
+- [x] Add fast booking path with recommended bed selection, while keeping manual Choose Bed option for budget/rating/type control
+- [x] Add separate Future Booking option from listing cards; Book Now supports check-in within 24 hours and Future Booking supports scheduled check-in within 30 days
+- [x] Add 10% Future Booking surcharge to final bed price, label it as Future booking price, and lock the backend price at confirmation
+- [x] Show Future Booking type and locked amount across consumer open bookings, history, owner dashboard, and owner history
+- [x] Show Future Booking counts/gross in operator and hidden superadmin dashboard snapshots
+- [x] Add operator/superadmin configuration UI for Future Booking surcharge percent; default remains 10% until configured
+- [x] Add missing modify-booking option for existing bookings so consumers can change check-in time and bed before check-in when allowed by booking rules
+- [x] Relock modified booking price on the backend and re-check same-property bed availability before saving
+- [x] Show modified booking status in consumer open bookings/history and owner dashboard/history
+- [x] Add check-in bed issue flow: if consumer reports bed is not good at check-in, offer another available bed in the same property first, then nearby property beds; track repeated bed reports and suggest/require owner bed replacement or operator review
 - [ ] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
 - [x] Booking history should show how much the consumer paid / final amount due for each booking
 - [x] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
@@ -135,14 +176,14 @@
 - [ ] Deploy Razorpay keys/secrets in Firebase Functions environment and run live-sandbox end-to-end checkout + webhook verification on production URL
 
 
-- [ ] Refine first-booking / second-booking Aadhaar UX copy and edge-case handling
+- [ ] Refine optional Aadhaar UX copy and edge-case handling
 - [ ] Add clearer privacy explanation for Aadhaar collection and storage
 - [ ] Add stronger trust cues around verified listings, payment safety, and support
 
 ## UX / UI
 - [x] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
 - [x] Rethink owner navigation menu: decide which owner links should stay, which should be removed, and remove confusing items like Apply as Owner when the user is already an owner
-- [ ] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
+- [x] Mobile/side menu should close when clicking outside it, and also provide an explicit close button inside the menu
 - [x] Add dark and light mode toggle for the app shell
 - [x] Keep owner dashboard focused on active bookings, future bookings, and checkout pending; move earnings, inventory, and bed controls to their own pages to reduce unnecessary database reads
 - [x] Fix dark-mode contrast for shared cards, tables, forms, and fixed Tailwind color utilities so text remains readable
@@ -150,7 +191,7 @@
 - [ ] Improve overall UX across login, booking, and profile completion
 - [x] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
 - [x] Owner inventory list pages should end with clear Add actions for Add Property, Add Room, Add Bed, and Add All; clicking each action should route to the correct create flow instead of making owners hunt through the page
-- [ ] Rethink the Create Property map UI: current map looks poor/blank and needs clearer tiles/loading state, better sizing, and a more confidence-building exact-location selection flow
+- [x] Rethink the Create Property map UI: current map looks poor/blank and needs clearer tiles/loading state, better sizing, and a more confidence-building exact-location selection flow
 - [ ] Polish UI after flow stability is confirmed
 - [ ] Improve current-location UX so it feels intentional and premium
 - [ ] Add richer trust-forward listing presentation
@@ -185,7 +226,9 @@
 
 ## Internal Roles
 - [x] Add role-change history view inside operator and superadmin consoles
-- [ ] Add superadmin-only UX for promoting users into operator role more safely with confirmation language
+- [x] Verify the read-only superadmin history panel smoke test in the browser, with no UI create/edit/delete actions and no Firestore permission error in the panel
+- [x] Add superadmin-only UX for promoting users into operator role more safely with confirmation language
+- [ ] Smoke test the safer operator-promotion flow in the internal control panel at end of day
 - [x] Add superadmin-only platform setting to control no-check-in timeout minutes
 - [x] Add city-level safe scarcity controls for superadmin and operator
 - [ ] Add global emergency off switch for scarcity mode from superadmin platform settings
@@ -212,5 +255,6 @@
 ## Train Tracking (Future)
 - [ ] If a consumer books a bed near a railway station, show a "Track My Train" option in their active booking view
 - [ ] When "Track My Train" is enabled, monitor train arrival using a train status API and send an in-app alert (or call the consumer) when the train is nearby — prompt them to head to the bed/facility
-- [ ] Add database-seeded superadmin management runbook so UI never edits existing superadmins
+- [x] Add database-seeded superadmin management runbook so UI never edits existing superadmins
 - [ ] Add operator audit review surface for monitoring sensitive changes
+- [ ] Remove the localhost-only auth bypass and dev booking preview before pushing to production

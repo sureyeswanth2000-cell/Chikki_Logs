@@ -33,6 +33,28 @@ function statusBadge(statusValue) {
     );
 }
 
+function bookingTypeBadge(item) {
+    const isFuture = String(item?.bookingMode ?? "").toLowerCase() === "future";
+    return (
+        <div>
+            <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${isFuture ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-700"}`}>
+                {item?.bookingModeLabel || (isFuture ? "Future Booking" : "Book Now")}
+            </span>
+            {isFuture && Number(item?.futureBookingSurchargePercent ?? 0) > 0 ? (
+                <p className="mt-1 text-[11px] text-slate-500">Future price locked</p>
+            ) : null}
+            {Number(item?.modifiedCount ?? 0) > 0 ? (
+                <p className="mt-1 text-[11px] font-semibold text-sky-700">Modified</p>
+            ) : null}
+        </div>
+    );
+}
+
+function lockedAmount(item) {
+    const total = Number(item?.totalAmount ?? 0);
+    return total > 0 ? `INR ${Math.round(total).toLocaleString("en-IN")}` : "-";
+}
+
 function BookingsTable({ items, emptyText, onCopyBookingId }) {
     if (items.length === 0) {
         return <p className="text-sm text-slate-500">{emptyText}</p>;
@@ -47,8 +69,10 @@ function BookingsTable({ items, emptyText, onCopyBookingId }) {
                         <th className="pb-2 text-left font-semibold">Property</th>
                         <th className="pb-2 text-left font-semibold">Room</th>
                         <th className="pb-2 text-left font-semibold">Bed</th>
+                        <th className="pb-2 text-left font-semibold">Type</th>
                         <th className="pb-2 text-left font-semibold">Check-In</th>
                         <th className="pb-2 text-left font-semibold">Check-Out</th>
+                        <th className="pb-2 text-left font-semibold">Locked Amount</th>
                         <th className="pb-2 text-left font-semibold">Status</th>
                     </tr>
                 </thead>
@@ -70,8 +94,10 @@ function BookingsTable({ items, emptyText, onCopyBookingId }) {
                             <td className="py-2 text-slate-700">{item.propertyName || "-"}</td>
                             <td className="py-2 text-slate-700">{item.roomName || "-"}</td>
                             <td className="py-2 text-slate-700">{item.bedCode || "-"}</td>
+                            <td className="py-2">{bookingTypeBadge(item)}</td>
                             <td className="py-2 text-slate-700">{bookingTime(item.checkInAt)}</td>
                             <td className="py-2 text-slate-700">{bookingTime(item.checkOutAt)}</td>
+                            <td className="py-2 text-slate-700">{lockedAmount(item)}</td>
                             <td className="py-2">{statusBadge(item.bookingStatus)}</td>
                         </tr>
                     ))}

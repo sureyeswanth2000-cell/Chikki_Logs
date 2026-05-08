@@ -1,6 +1,6 @@
 # Chikki Masterbook
 
-Last updated: 2026-04-29
+Last updated: 2026-05-07
 Audience: Founders + Builders
 Role: Canonical internal operating manual for Chikki Beds
 
@@ -88,7 +88,7 @@ Confirmed model from the repo and working docs:
 - Fee model: 10% commission + 2% payment/gateway charge
 - Price shown to user: hourly and overnight prices on the listing card, plus final amount due at checkout
 - Cancellation window: configurable by superadmin (default 15 minutes)
-- Aadhaar requirement: not required for first booking, required from second booking onward, with a popup prompt on the home screen after the first booking completes
+- Aadhaar handling: optional during booking, with a friendly popup prompt on the home screen after the first booking completes for users who want to save it for repeat-booking convenience
 - Aadhaar storage: full Aadhaar is stored only in the backend-only `aadhaar_identity_vault`; business records use `aadhaarRefId` and masked last-4 metadata only
 
 Pricing model:
@@ -106,7 +106,7 @@ These rules keep the MVP simple:
 ### Psychology / User Behavior
 - visible hourly and overnight price options lower hesitation during decision making
 - Small advance creates commitment without forcing full payment upfront
-- Delaying Aadhaar until repeat usage lowers first-booking friction while still preserving traceability for returning users
+- Keeping Aadhaar optional during booking lowers first-booking friction while still letting returning users save it for convenience
 
 ### Gaps / Risks
 - Fee transparency may later need a trust explanation even if the UI still shows only final price
@@ -132,7 +132,7 @@ Implemented flow in the app:
 - Open Google Maps directions for a property from listing or booking pages
 - Start booking from listing cards into `/booking`
 - Choose exact bed and start time first
-- Review booking details with conditional Aadhaar reference confirmation based on booking count
+- Review booking details with an optional Aadhaar prompt based on user preference
 - Allow end time to stay optional for first-time flow
 - Create booking with INR 100 advance placeholder
 - See live/open bookings
@@ -248,8 +248,8 @@ Implemented superadmin capabilities include:
 - city-level safe scarcity control
 - user search by phone
 - create operator
-- create new superadmin
-- assign user, owner, operator, and new superadmin roles
+- view active and inactive superadmin history from a generated snapshot refreshed by backend scripts
+- backend-only superadmin lifecycle management scripts
 - review and reject owner applications
 - sign out and role-based protected access
 
@@ -268,7 +268,7 @@ The MVP needs central control over rollout, owner access, and operational hygien
 - KPI depth is still lighter than the long-term vision
 - Superadmin currently has more operational tooling than analytical intelligence
 - Audit and anomaly signals exist in the backend, but the admin UX around them is still limited
-- Existing superadmin accounts are intentionally locked from UI changes
+- Existing superadmin accounts are intentionally locked from UI changes and can only be changed through backend scripts
 - role-history review still needs a richer UX surface
 
 #### Future Direction
@@ -575,12 +575,12 @@ Booking should feel location-first and price-visible before the user clicks thro
 - hourly and overnight prices are visible on the home page
 - `Book This` opens a dedicated booking route
 - the first booking step collects exact bed and start time
-- the review step includes the repeat-booking Aadhaar requirement when applicable
+- the review step includes an optional Aadhaar prompt when the user wants it saved
 - start time is limited to the next 24 hours
 - end time is optional until checkout
 - checkout shows actual time spent and the final amount due
 - payment is collected at checkout
-- Aadhaar reference becomes mandatory from the second booking onward; if no saved reference exists, the backend creates one in the protected vault
+- Aadhaar stays optional during booking; if the user shares it, the backend stores a protected reference for repeat-booking convenience
 - completed bookings can be rated once from `/history`
 - bed rating average/count appears during search and bed selection
 - detected-location searches sort listings by nearest property and preserve that location context into `/booking`
@@ -701,8 +701,8 @@ Stage 4:
 - owners default to `/owner` when there is no explicit booking intent
 - owners may intentionally switch into consumer mode and book other owners' beds
 - operator can only swap roles between consumer and owner
-- only superadmin can create operator or new superadmin roles from the UI
-- existing superadmin accounts are not editable from the UI
+- only superadmin can create operator roles from the UI
+- existing superadmin accounts are view-only in the UI and are managed through backend scripts and the generated snapshot sync
 - superadmin access is hidden behind an internal path
 - booking unit is the bed
 - home page shows hourly and overnight prices before booking
@@ -714,8 +714,7 @@ Stage 4:
 - if the stay is 15 minutes or more but less than 60 minutes, charge one full hour
 - INR 100 advance is used at booking
 - cancellation window is 15 minutes
-- Aadhaar is optional for the first booking and mandatory from the second booking onward
-- after the first booking, the home screen prompts the consumer to add Aadhaar before booking again
+- Aadhaar stays optional for booking, and after the first booking the home screen prompts the consumer to add Aadhaar later only if they want it saved
 - full Aadhaar is not stored in user, booking, payment, or availability records
 - Aadhaar reference IDs are UUID-style random values and are the only Aadhaar link used by business records
 - full Aadhaar can be revealed only through the superadmin break-glass flow and must never be copied into tickets, chats, notes, or other normal records

@@ -68,6 +68,7 @@ export default function OperatorPage() {
   const [savingCity, setSavingCity] = useState(false);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
   const [platformFeeInr, setPlatformFeeInr] = useState(9);
+  const [futureBookingSurchargePercent, setFutureBookingSurchargePercent] = useState(10);
   const [platformCommissionPercent, setPlatformCommissionPercent] = useState(5);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -147,6 +148,7 @@ export default function OperatorPage() {
       const settings = await getPlatformSettings();
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
+      setFutureBookingSurchargePercent(Number(settings?.futureBookingSurchargePercent ?? 10));
       setPlatformCommissionPercent(Number(settings?.platformCommissionPercent ?? 5));
     } catch {
       // default remains — do not block the UI
@@ -343,9 +345,10 @@ export default function OperatorPage() {
     setSettingsError(null);
     setSettingsNotice(null);
     try {
-      const next = await updatePlatformSettings({ checkInGraceMinutes, platformFeeInr });
+      const next = await updatePlatformSettings({ checkInGraceMinutes, platformFeeInr, futureBookingSurchargePercent });
       setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(next?.platformFeeInr ?? 9));
+      setFutureBookingSurchargePercent(Number(next?.futureBookingSurchargePercent ?? 10));
       setSettingsNotice("Platform timeout updated successfully.");
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : "Could not save platform settings.");
@@ -537,7 +540,9 @@ export default function OperatorPage() {
           ) : metrics ? (
             <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
               <MetricCard label="Bookings Today" value={metrics.bookingsToday} />
+              <MetricCard label="Future Today" value={metrics.futureBookingsToday ?? 0} />
               <MetricCard label="Gross Today" value={`INR ${metrics.grossCollectionToday}`} />
+              <MetricCard label="Future Gross" value={`INR ${metrics.futureBookingGrossToday ?? 0}`} />
               <MetricCard label="Commission" value={`INR ${metrics.commissionToday}`} />
               <MetricCard label="Active Properties" value={metrics.activeProperties} />
               <MetricCard label="Active Owners" value={metrics.activeOwners} />
@@ -641,7 +646,7 @@ export default function OperatorPage() {
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
           <h2 className="text-lg font-bold text-slate-800">Platform Settings</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Control no-check-in timeout and the fixed platform fee charged once per booking during checkout.
+            Control no-check-in timeout, fixed platform fee, and the Future Booking surcharge.
           </p>
 
           {settingsError ? (
@@ -682,6 +687,19 @@ export default function OperatorPage() {
                   max={999}
                   value={platformFeeInr}
                   onChange={(event) => setPlatformFeeInr(Number(event.target.value || 0))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Future Booking Surcharge (%)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={futureBookingSurchargePercent}
+                  onChange={(event) => setFutureBookingSurchargePercent(Number(event.target.value || 0))}
                   className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
                 />
               </div>

@@ -73,6 +73,19 @@ export function SiteChrome({ children }) {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [menuOpen]);
+
   function toggleTheme() {
     const nextTheme = theme === "dark" ? "light" : "dark";
     setTheme(nextTheme);
@@ -125,6 +138,7 @@ export function SiteChrome({ children }) {
               className="inline-flex rounded-lg border border-slate-300 p-2 text-slate-700 transition hover:bg-slate-50"
               aria-label="Toggle menu"
               aria-expanded={menuOpen}
+              aria-controls="site-menu"
             >
               <span className="sr-only">Toggle menu</span>
               <span className="space-y-1">
@@ -156,7 +170,7 @@ export function SiteChrome({ children }) {
               onClick={() => setMenuOpen(false)}
             />
 
-            <div className="absolute right-5 top-[68px] z-50 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-xl md:right-6">
+            <div id="site-menu" className="absolute right-5 top-[68px] z-50 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-xl md:right-6">
               <div className="mb-2 flex items-center justify-between px-1">
                 <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Menu</span>
                 <button

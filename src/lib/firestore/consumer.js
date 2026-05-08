@@ -5,6 +5,8 @@ import {
     completeCheckout,
     createBookingWithAdvance as createBookingWithAdvanceCallable,
     createRazorpayCheckoutOrder as createRazorpayCheckoutOrderCallable,
+    modifyConfirmedBooking as modifyConfirmedBookingCallable,
+    reportBedIssue as reportBedIssueCallable,
     submitBookingRating as submitBookingRatingCallable,
 } from "@/lib/cloud/security";
 import { distanceKmBetween } from "@/lib/geo";
@@ -12,11 +14,29 @@ import { applyDemandMultiplier } from "@/lib/demand-pricing";
 import pilotCities from "../../../data/pilot-cities.json";
 const DEFAULT_PLATFORM_FEE_INR = 9;
 const DEFAULT_PLATFORM_COMMISSION_PERCENT = 5;
+const DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT = 10;
 
 function applyCommission(basePrice, commissionPercent) {
     const pct = Math.max(0, Math.min(100, Number(commissionPercent) || 0));
     return Math.round(basePrice * (1 + pct / 100));
 }
+
+function applyPercentSurcharge(basePrice, surchargePercent) {
+    const pct = Math.max(0, Math.min(100, Number(surchargePercent) || 0));
+    return Math.round(Math.max(0, Number(basePrice) || 0) * (1 + pct / 100));
+}
+
+function futureBookingSurchargePercentFor(filters = {}, context = {}) {
+    if (String(filters.bookingMode ?? "").toLowerCase() !== "future") {
+        return 0;
+    }
+    const configured = Number(context.futureBookingSurchargePercent);
+    if (Number.isFinite(configured)) {
+        return Math.max(0, Math.min(100, Math.round(configured)));
+    }
+    return DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT;
+}
+
 function toTime(value) {
     const parsed = new Date(value).getTime();
     if (Number.isNaN(parsed)) {
@@ -43,22 +63,59 @@ function computeBasePrice(duration, bedType, ownerPrices = {}) {
     return baseByDuration[duration] + acExtra;
 }
 
+function priceForDuration(duration, bed) {
+    if (duration === "overnight") {
+        return Number(bed.displayOvernightPrice ?? bed.overnightPrice ?? 0);
+    }
+    if (duration === "overday") {
+        return Number(bed.displayOverdayPrice ?? bed.overdayPrice ?? 0);
+    }
+    return Number(bed.displayHourlyPrice ?? bed.hourlyPrice ?? 0);
+}
+
+function chooseRecommendedBed(bedOptions, duration) {
+    const scoredBeds = (Array.isArray(bedOptions) ? bedOptions : [])
+        .map((bed) => {
+            const ratingCount = Number(bed.ratingCount ?? 0);
+            const ratingAverage = ratingCount > 0 ? Number(bed.ratingAverage ?? 0) : 3.8;
+            const price = priceForDuration(duration, bed);
+            const acBonus = String(bed.bedType ?? "").toUpperCase() === "AC" ? 0.15 : 0;
+            const ratingConfidence = Math.min(ratingCount, 20) / 20;
+            const score = (ratingAverage * 18) + (ratingConfidence * 8) + acBonus - (price / 100);
+            return { bed, score, price };
+        })
+        .filter((item) => Number.isFinite(item.price) && item.price > 0)
+        .sort((a, b) => {
+            if (b.score !== a.score) {
+                return b.score - a.score;
+            }
+            return a.price - b.price;
+        });
+
+    return scoredBeds[0]?.bed ?? null;
+}
+
 async function readPlatformSettings() {
     try {
-        // Try canonical location first, then fall back to legacy
-        const [mainSnap, legacySnap] = await Promise.all([
-            getDoc(doc(db, COLLECTIONS.platformSettings, "main")),
-            getDoc(doc(db, COLLECTIONS.cities, "_platform_cfg")),
-        ]);
-        const main = mainSnap.exists() ? (mainSnap.data() || {}) : {};
+        // Consumer pages must not read platform_settings/main because that
+        // collection is intentionally internal-only in Firestore rules.
+        const legacySnap = await getDoc(doc(db, COLLECTIONS.cities, "_platform_cfg"));
         const legacy = legacySnap.exists() ? (legacySnap.data() || {}) : {};
-        const feeRaw = main.platformFeeInr ?? legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR;
-        const commRaw = main.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT;
+        const feeRaw = legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR;
+        const commRaw = legacy.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT;
+        const futureRaw = legacy.futureBookingSurchargePercent ?? DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT;
         const fee = Number.isFinite(Number(feeRaw)) ? Math.max(0, Math.min(999, Math.round(Number(feeRaw)))) : DEFAULT_PLATFORM_FEE_INR;
         const comm = Math.max(0, Math.min(100, Number(commRaw) || DEFAULT_PLATFORM_COMMISSION_PERCENT));
-        return { platformFeeInr: fee, platformCommissionPercent: comm };
+        const futureBookingSurchargePercent = Number.isFinite(Number(futureRaw))
+            ? Math.max(0, Math.min(100, Math.round(Number(futureRaw))))
+            : DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT;
+        return { platformFeeInr: fee, platformCommissionPercent: comm, futureBookingSurchargePercent };
     } catch {
-        return { platformFeeInr: DEFAULT_PLATFORM_FEE_INR, platformCommissionPercent: DEFAULT_PLATFORM_COMMISSION_PERCENT };
+        return {
+            platformFeeInr: DEFAULT_PLATFORM_FEE_INR,
+            platformCommissionPercent: DEFAULT_PLATFORM_COMMISSION_PERCENT,
+            futureBookingSurchargePercent: DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT,
+        };
     }
 }
 function demandDocId(scope, scopeId) {
@@ -93,8 +150,12 @@ async function readDemandSummary(scope, scopeId) {
     if (!id) {
         return normalizeDemandSummary(null, scope);
     }
-    const snapshot = await getDoc(doc(db, COLLECTIONS.demandPricing, demandDocId(scope, id)));
-    return normalizeDemandSummary(snapshot.exists() ? snapshot.data() : null, scope);
+    try {
+        const snapshot = await getDoc(doc(db, COLLECTIONS.demandPricing, demandDocId(scope, id)));
+        return normalizeDemandSummary(snapshot.exists() ? snapshot.data() : null, scope);
+    } catch {
+        return normalizeDemandSummary(null, scope);
+    }
 }
 function chooseEffectiveDemandSummary(propertySummary, citySummary) {
     if (propertySummary.active) {
@@ -125,6 +186,29 @@ function isBlockActiveNow(block) {
     }
     return now >= start && now <= end;
 }
+
+function isBlockActiveForWindow(block, requestedStartMs, requestedEndMs) {
+    const start = toTimeOrNull(block.blockStart);
+    if (start === null) {
+        return false;
+    }
+    const end = block.isFullBlock
+        ? Number.POSITIVE_INFINITY
+        : toTimeOrNull(block.blockEnd) ?? Number.POSITIVE_INFINITY;
+    return hasOverlap(requestedStartMs, requestedEndMs, start, end);
+}
+
+function bookingHoldEndForWindow(data) {
+    const checkOutMs = toTimeOrNull(data.checkOutAt);
+    if (checkOutMs !== null) {
+        return checkOutMs;
+    }
+    if (String(data.bookingStatus ?? "").toLowerCase() === "checked_in") {
+        return Number.POSITIVE_INFINITY;
+    }
+    return toTimeOrNull(data.holdEndAt) ?? Number.POSITIVE_INFINITY;
+}
+
 export function validateAadhaar(aadhaar) {
     const digits = aadhaar.replace(/\D/g, "");
     return digits.length === 12;
@@ -166,6 +250,24 @@ function readBookingCode(data, bookingId) {
         return raw;
     }
     return bookingCodeFor(bookingId, Date.now());
+}
+
+function bookingModeLabel(value) {
+    return String(value ?? "").toLowerCase() === "future" ? "Future Booking" : "Book Now";
+}
+
+function paymentSummary(data = {}) {
+    return {
+        bookingMode: String(data.bookingMode ?? ""),
+        futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+        futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+        futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
+        bedAmount: Number(data.bedAmount ?? 0),
+        platformFeeAmount: Number(data.platformFeeAmount ?? 0),
+        totalAmount: Number(data.totalAmount ?? 0),
+        advancePaid: Number(data.advancePaid ?? 0),
+        remainingPaid: Number(data.remainingPaid ?? 0),
+    };
 }
 
 function normalizedBedTypeRequirement(value) {
@@ -221,6 +323,12 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             checkInAt: String(data.checkInAt ?? ""),
             checkOutAt: String(data.checkOutAt ?? ""),
             bookingStatus: String(data.bookingStatus ?? ""),
+            bookingMode: String(data.bookingMode ?? "now"),
+            modifiedCount: Number(data.modifiedCount ?? 0),
+            modifiedAt: data.modifiedAt ?? null,
+            futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+            futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+            futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
             duration: String(data.duration ?? ""),
             ratingOverall: Number(data.ratingOverall ?? 0),
             ratingComment: String(data.ratingComment ?? ""),
@@ -265,13 +373,7 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             );
             if (paySnap.empty) return;
             const payData = paySnap.docs[0].data();
-            paymentMap[booking.id] = {
-                bedAmount: Number(payData.bedAmount ?? 0),
-                platformFeeAmount: Number(payData.platformFeeAmount ?? 0),
-                totalAmount: Number(payData.totalAmount ?? 0),
-                advancePaid: Number(payData.advancePaid ?? 0),
-                remainingPaid: Number(payData.remainingPaid ?? 0),
-            };
+            paymentMap[booking.id] = paymentSummary(payData);
         }),
     ]);
 
@@ -291,6 +393,11 @@ export async function getConsumerBookingHistory(userId, filters = {}) {
             checkInMs,
             checkOutMs,
             bucket: ongoing ? "ongoing" : "old",
+            bookingMode: item.bookingMode || paymentMap[item.id]?.bookingMode || "now",
+            bookingModeLabel: bookingModeLabel(item.bookingMode || paymentMap[item.id]?.bookingMode),
+            futureBookingSurchargePercent: paymentMap[item.id]?.futureBookingSurchargePercent ?? item.futureBookingSurchargePercent ?? 0,
+            futureBookingSurchargeAmount: paymentMap[item.id]?.futureBookingSurchargeAmount ?? item.futureBookingSurchargeAmount ?? 0,
+            futureBookingPriceLabel: paymentMap[item.id]?.futureBookingPriceLabel ?? item.futureBookingPriceLabel ?? "",
             bedAmount: paymentMap[item.id]?.bedAmount ?? null,
             platformFeeAmount: paymentMap[item.id]?.platformFeeAmount ?? null,
             totalAmount: paymentMap[item.id]?.totalAmount ?? null,
@@ -413,7 +520,31 @@ export async function getActiveCities() {
     }));
     return staticCities.sort((a, b) => a.name.localeCompare(b.name));
 }
-export async function getListingsByCity(filters) {
+
+function readPropertyListingDoc(item) {
+    const data = item.data();
+    return {
+        id: item.id,
+        ownerId: String(data.ownerId ?? ""),
+        cityId: String(data.cityId ?? ""),
+        cityName: String(data.cityName ?? ""),
+        name: String(data.name ?? ""),
+        exactAddress: String(data.exactAddress ?? ""),
+        lat: Number(data.lat ?? 0),
+        lng: Number(data.lng ?? 0),
+        nearRailwayKm: Number(data.nearRailwayKm ?? 0),
+        nearBusKm: Number(data.nearBusKm ?? 0),
+        nearRailwayName: String(data.nearRailwayName ?? ""),
+        nearBusName: String(data.nearBusName ?? ""),
+        nearestTransitType: String(data.nearestTransitType ?? ""),
+        nearestTransitName: String(data.nearestTransitName ?? ""),
+        nearestTransitKm: Number(data.nearestTransitKm ?? 0),
+        publicOwnerRevenueSharePercent: Number(data.publicOwnerRevenueSharePercent ?? data.ownerRevenueSharePercentPublic ?? NaN),
+        status: String(data.status ?? "inactive"),
+    };
+}
+
+async function readListingContext(filters) {
     const userLocation = {
         lat: Number(filters.userLat),
         lng: Number(filters.userLng),
@@ -421,78 +552,46 @@ export async function getListingsByCity(filters) {
     const hasUserLocation = Number.isFinite(userLocation.lat) && Number.isFinite(userLocation.lng);
     const citySnap = await getDoc(doc(db, COLLECTIONS.cities, filters.cityId));
     const cityData = citySnap.exists() ? citySnap.data() : {};
-    const scarcityEnabled = Boolean(cityData?.scarcityEnabled);
     const rawScarcityValue = Number(cityData?.scarcityValue ?? 0);
-    const scarcityValue = Number.isFinite(rawScarcityValue)
-        ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
-        : 0;
-    const cityDemandSummary = await readDemandSummary("city", filters.cityId);
     const platformSettings = await readPlatformSettings();
-    const platformFeeInr = platformSettings.platformFeeInr;
-    const platformCommissionPercent = platformSettings.platformCommissionPercent;
 
-    const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
-    const propertySnapshot = await getDocs(propertiesQuery);
-    const properties = propertySnapshot.docs.map((item) => {
+    return {
+        userLocation,
+        hasUserLocation,
+        scarcityEnabled: Boolean(cityData?.scarcityEnabled),
+        scarcityValue: Number.isFinite(rawScarcityValue)
+            ? Math.max(1, Math.min(5, Math.round(rawScarcityValue)))
+            : 0,
+        cityDemandSummary: await readDemandSummary("city", filters.cityId),
+        platformFeeInr: platformSettings.platformFeeInr,
+        platformCommissionPercent: platformSettings.platformCommissionPercent,
+        futureBookingSurchargePercent: platformSettings.futureBookingSurchargePercent,
+    };
+}
+
+async function buildListingForProperty(property, filters, context) {
+    const ownerCommissionPercent = Number.isFinite(property.publicOwnerRevenueSharePercent)
+        ? Math.max(0, Math.min(100, property.publicOwnerRevenueSharePercent))
+        : context.platformCommissionPercent;
+    const propertyDemandSummary = await readDemandSummary("property", property.id);
+    const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, context.cityDemandSummary);
+    const demandMultiplierPercent = Number(demandSummary.multiplierPercent ?? 0);
+    const futureBookingSurchargePercent = futureBookingSurchargePercentFor(filters, context);
+    const priceLabel = futureBookingSurchargePercent > 0 ? "Future booking price" : "";
+    const roomsQuery = query(collection(db, COLLECTIONS.rooms), where("propertyId", "==", property.id));
+    const roomsSnapshot = await getDocs(roomsQuery);
+    const rooms = roomsSnapshot.docs.map((item) => {
         const data = item.data();
         return {
             id: item.id,
-            ownerId: String(data.ownerId ?? ""),
-            cityId: String(data.cityId ?? ""),
-            cityName: String(data.cityName ?? ""),
-            name: String(data.name ?? ""),
-            exactAddress: String(data.exactAddress ?? ""),
-            lat: Number(data.lat ?? 0),
-            lng: Number(data.lng ?? 0),
-            nearRailwayKm: Number(data.nearRailwayKm ?? 0),
-            nearBusKm: Number(data.nearBusKm ?? 0),
-            status: String(data.status ?? "inactive"),
+            propertyId: String(data.propertyId ?? ""),
+            roomName: String(data.roomName ?? ""),
         };
     });
-
-    // Fetch owner commission overrides in batch for all properties
-    const uniqueOwnerIds = [...new Set(properties.map((p) => p.ownerId).filter(Boolean))];
-    const ownerCommissionMap = {};
-    if (uniqueOwnerIds.length > 0) {
-        await Promise.all(uniqueOwnerIds.map(async (ownerId) => {
-            try {
-                const ownerSnap = await getDoc(doc(db, COLLECTIONS.users, ownerId));
-                if (ownerSnap.exists()) {
-                    const ownerData = ownerSnap.data() || {};
-                    const override = ownerData.ownerRevenueSharePercent;
-                    ownerCommissionMap[ownerId] = (typeof override === "number")
-                        ? Math.max(0, Math.min(100, override))
-                        : platformCommissionPercent;
-                } else {
-                    ownerCommissionMap[ownerId] = platformCommissionPercent;
-                }
-            } catch {
-                ownerCommissionMap[ownerId] = platformCommissionPercent;
-            }
-        }));
-    }
-
-    const listings = [];
-
-    for (const property of properties) {
-        const ownerCommissionPercent = ownerCommissionMap[property.ownerId] ?? platformCommissionPercent;
-        const propertyDemandSummary = await readDemandSummary("property", property.id);
-        const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
-        const demandMultiplierPercent = Number(demandSummary.multiplierPercent ?? 0);
-        const roomsQuery = query(collection(db, COLLECTIONS.rooms), where("propertyId", "==", property.id));
-        const roomsSnapshot = await getDocs(roomsQuery);
-        const rooms = roomsSnapshot.docs.map((item) => {
-            const data = item.data();
-            return {
-                id: item.id,
-                propertyId: String(data.propertyId ?? ""),
-                roomName: String(data.roomName ?? ""),
-            };
-        });
-        const bedsQuery = query(collection(db, COLLECTIONS.beds), where("propertyId", "==", property.id));
-        const bedsSnapshot = await getDocs(bedsQuery);
-        const allBeds = bedsSnapshot.docs
-            .map((item) => {
+    const bedsQuery = query(collection(db, COLLECTIONS.beds), where("propertyId", "==", property.id), where("active", "==", true));
+    const bedsSnapshot = await getDocs(bedsQuery);
+    const allBeds = bedsSnapshot.docs
+        .map((item) => {
             const data = item.data();
             return {
                 id: item.id,
@@ -508,148 +607,192 @@ export async function getListingsByCity(filters) {
                 active: Boolean(data.active),
             };
         })
-            .filter((item) => item.active);
-        const blocksQuery = query(collection(db, COLLECTIONS.bedBlocks), where("propertyId", "==", property.id));
-        const blocksSnapshot = await getDocs(blocksQuery);
-        const activeBlockedBedIds = new Set(blocksSnapshot.docs
-            .map((item) => item.data())
-            .map((data) => ({
+        .filter((item) => item.active);
+    const requestedStartMs = toTimeOrNull(filters.checkInAt) ?? Date.now();
+    const requestedEndMs = String(filters.bookingMode ?? "").toLowerCase() === "future"
+        ? requestedStartMs + (24 * 60 * 60 * 1000)
+        : Number.POSITIVE_INFINITY;
+    const blocksQuery = query(collection(db, COLLECTIONS.bedBlocks), where("propertyId", "==", property.id), where("active", "==", true));
+    const blocksSnapshot = await getDocs(blocksQuery);
+    const activeBlockedBedIds = new Set(blocksSnapshot.docs
+        .map((item) => item.data())
+        .map((data) => ({
             bedId: String(data.bedId ?? ""),
             blockStart: String(data.blockStart ?? ""),
             blockEnd: typeof data.blockEnd === "string" ? data.blockEnd : undefined,
             isFullBlock: Boolean(data.isFullBlock),
         }))
-            .filter((block) => isBlockActiveNow(block))
-            .map((block) => block.bedId));
-        const bookingsQuery = query(collection(db, COLLECTIONS.bookingAvailability), where("propertyId", "==", property.id));
-        const bookingsSnapshot = await getDocs(bookingsQuery);
-        const activeBookedBedIds = new Set(bookingsSnapshot.docs
-            .map((item) => item.data())
-            .filter((data) => data.bookingStatus === "confirmed" || data.bookingStatus === "checked_in")
-            .map((data) => ({
+        .filter((block) => filters.checkInAt ? isBlockActiveForWindow(block, requestedStartMs, requestedEndMs) : isBlockActiveNow(block))
+        .map((block) => block.bedId));
+    const bookingsQuery = query(collection(db, COLLECTIONS.bookingAvailability), where("propertyId", "==", property.id));
+    const bookingsSnapshot = await getDocs(bookingsQuery);
+    const activeBookedBedIds = new Set(bookingsSnapshot.docs
+        .map((item) => item.data())
+        .filter((data) => data.bookingStatus === "confirmed" || data.bookingStatus === "checked_in")
+        .map((data) => ({
             bedId: String(data.bedId ?? ""),
+            checkInAt: String(data.checkInAt ?? ""),
             checkOutAt: String(data.checkOutAt ?? ""),
+            holdEndAt: String(data.holdEndAt ?? ""),
         }))
-            .filter((booking) => {
-            const checkOutMs = toTimeOrNull(booking.checkOutAt);
-            return checkOutMs === null || checkOutMs > Date.now();
+        .filter((booking) => {
+            const bookingStartMs = toTimeOrNull(booking.checkInAt);
+            if (bookingStartMs === null) {
+                return false;
+            }
+            return hasOverlap(requestedStartMs, requestedEndMs, bookingStartMs, bookingHoldEndForWindow(booking));
         })
-            .map((booking) => booking.bedId));
-        const availableBeds = allBeds.filter((bed) => !activeBlockedBedIds.has(bed.id) && !activeBookedBedIds.has(bed.id));
-        const availableInKnownRooms = availableBeds.filter((bed) => rooms.some((room) => room.id === bed.roomId));
-        const bedOptions = availableInKnownRooms.map((bed) => ({
-            bedId: bed.id,
-            roomId: bed.roomId,
-            bedCode: bed.bedCode,
-            bedType: bed.bedType,
+        .map((booking) => booking.bedId));
+    const availableBeds = allBeds.filter((bed) => !activeBlockedBedIds.has(bed.id) && !activeBookedBedIds.has(bed.id));
+    const availableInKnownRooms = availableBeds.filter((bed) => rooms.some((room) => room.id === bed.roomId));
+    const bedOptions = availableInKnownRooms.map((bed) => ({
+        bedId: bed.id,
+        roomId: bed.roomId,
+        bedCode: bed.bedCode,
+        bedType: bed.bedType,
+        hourlyPrice: bed.hourlyPrice,
+        overnightPrice: bed.overnightPrice,
+        overdayPrice: bed.overdayPrice,
+        displayHourlyPrice: applyPercentSurcharge(applyCommission(applyDemandMultiplier(computeBasePrice("hourly", bed.bedType, {
             hourlyPrice: bed.hourlyPrice,
             overnightPrice: bed.overnightPrice,
             overdayPrice: bed.overdayPrice,
-            displayHourlyPrice: applyCommission(applyDemandMultiplier(computeBasePrice("hourly", bed.bedType, {
-                hourlyPrice: bed.hourlyPrice,
-                overnightPrice: bed.overnightPrice,
-                overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent), ownerCommissionPercent),
-            displayOvernightPrice: applyCommission(applyDemandMultiplier(computeBasePrice("overnight", bed.bedType, {
-                hourlyPrice: bed.hourlyPrice,
-                overnightPrice: bed.overnightPrice,
-                overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent), ownerCommissionPercent),
-            displayOverdayPrice: applyCommission(applyDemandMultiplier(computeBasePrice("overday", bed.bedType, {
-                hourlyPrice: bed.hourlyPrice,
-                overnightPrice: bed.overnightPrice,
-                overdayPrice: bed.overdayPrice,
-            }), demandMultiplierPercent), ownerCommissionPercent),
-            demandActive: Boolean(demandSummary.active),
-            demandWarningActive: Boolean(demandSummary.warningActive),
-            demandMultiplierPercent,
-            demandSource: demandSummary.source,
-            demandReason: demandSummary.reason,
-            demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
-            platformFeeInr,
-            ratingAverage: bed.ratingAverage,
-            ratingCount: bed.ratingCount,
-        }));
-        const filteredBedOptions = filters.bedFilter === "all"
-            ? bedOptions
-            : bedOptions.filter((item) => item.bedType === filters.bedFilter);
-        if (filteredBedOptions.length === 0) {
-            continue;
-        }
-        const basePriceCandidates = filteredBedOptions.map((item) => computeBasePrice(filters.duration, item.bedType, {
-            hourlyPrice: item.hourlyPrice,
-            overnightPrice: item.overnightPrice,
-            overdayPrice: item.overdayPrice,
-        }));
-        const priceCandidates = basePriceCandidates.map((amount) => applyCommission(applyDemandMultiplier(amount, demandMultiplierPercent), ownerCommissionPercent));
-        const hourlyPriceCandidates = filteredBedOptions.map((item) => item.displayHourlyPrice);
-        const overnightPriceCandidates = filteredBedOptions.map((item) => item.displayOvernightPrice);
-        const baseHourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {
-            hourlyPrice: item.hourlyPrice,
-            overnightPrice: item.overnightPrice,
-            overdayPrice: item.overdayPrice,
-        }));
-        const baseOvernightPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("overnight", item.bedType, {
-            hourlyPrice: item.hourlyPrice,
-            overnightPrice: item.overnightPrice,
-            overdayPrice: item.overdayPrice,
-        }));
-        const baseMinFinalPrice = Math.min(...basePriceCandidates);
-        const baseMinHourlyPrice = Math.min(...baseHourlyPriceCandidates);
-        const baseMinOvernightPrice = Math.min(...baseOvernightPriceCandidates);
-        const minFinalPrice = Math.min(...priceCandidates);
-        const minHourlyPrice = Math.min(...hourlyPriceCandidates);
-        const minOvernightPrice = Math.min(...overnightPriceCandidates);
-        if (filters.maxFinalPrice && minFinalPrice > filters.maxFinalPrice) {
-            continue;
-        }
-        const distanceFromUserKm = hasUserLocation
-            ? distanceKmBetween(userLocation, { lat: property.lat, lng: property.lng })
-            : null;
-        const realAvailableBeds = filteredBedOptions.length;
-        const ratedBeds = filteredBedOptions.filter((item) => Number(item.ratingCount ?? 0) > 0);
-        const totalRatingCount = ratedBeds.reduce((total, item) => total + Number(item.ratingCount ?? 0), 0);
-        const totalRatingValue = ratedBeds.reduce((total, item) => total + (Number(item.ratingAverage ?? 0) * Number(item.ratingCount ?? 0)), 0);
-        const listingRatingAverage = totalRatingCount > 0 ? Math.round((totalRatingValue / totalRatingCount) * 10) / 10 : 0;
-        const shownAvailableBeds = scarcityEnabled && scarcityValue > 0
-            ? Math.min(realAvailableBeds, scarcityValue)
-            : realAvailableBeds;
-
-        listings.push({
-            propertyId: property.id,
-            propertyName: property.name,
-            cityName: property.cityName,
-            exactAddress: property.exactAddress,
-            lat: property.lat,
-            lng: property.lng,
-            nearRailwayKm: property.nearRailwayKm,
-            nearBusKm: property.nearBusKm,
-            distanceFromUserKm,
-            availableBeds: realAvailableBeds,
-            shownAvailableBeds,
-            scarcityApplied: scarcityEnabled && shownAvailableBeds < realAvailableBeds,
-            acBeds: filteredBedOptions.filter((item) => item.bedType === "AC").length,
-            nonAcBeds: filteredBedOptions.filter((item) => item.bedType === "NON_AC").length,
-            baseMinFinalPrice,
-            baseMinHourlyPrice,
-            baseMinOvernightPrice,
-            minFinalPrice,
-            minHourlyPrice,
-            minOvernightPrice,
-            platformFeeInr,
-            demandActive: Boolean(demandSummary.active),
-            demandWarningActive: Boolean(demandSummary.warningActive),
-            demandMultiplierPercent,
-            demandSource: demandSummary.source,
-            demandReason: demandSummary.reason,
-            demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
-            ratingAverage: listingRatingAverage,
-            ratingCount: totalRatingCount,
-            bedOptions: filteredBedOptions,
-        });
+        }), demandMultiplierPercent), ownerCommissionPercent), futureBookingSurchargePercent),
+        displayOvernightPrice: applyPercentSurcharge(applyCommission(applyDemandMultiplier(computeBasePrice("overnight", bed.bedType, {
+            hourlyPrice: bed.hourlyPrice,
+            overnightPrice: bed.overnightPrice,
+            overdayPrice: bed.overdayPrice,
+        }), demandMultiplierPercent), ownerCommissionPercent), futureBookingSurchargePercent),
+        displayOverdayPrice: applyPercentSurcharge(applyCommission(applyDemandMultiplier(computeBasePrice("overday", bed.bedType, {
+            hourlyPrice: bed.hourlyPrice,
+            overnightPrice: bed.overnightPrice,
+            overdayPrice: bed.overdayPrice,
+        }), demandMultiplierPercent), ownerCommissionPercent), futureBookingSurchargePercent),
+        futureBookingSurchargePercent,
+        priceLabel,
+        demandActive: Boolean(demandSummary.active),
+        demandWarningActive: Boolean(demandSummary.warningActive),
+        demandMultiplierPercent,
+        demandSource: demandSummary.source,
+        demandReason: demandSummary.reason,
+        demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
+        platformFeeInr: context.platformFeeInr,
+        ratingAverage: bed.ratingAverage,
+        ratingCount: bed.ratingCount,
+    }));
+    const filteredBedOptions = filters.bedFilter === "all"
+        ? bedOptions
+        : bedOptions.filter((item) => item.bedType === filters.bedFilter);
+    if (filteredBedOptions.length === 0) {
+        return null;
     }
+    const basePriceCandidates = filteredBedOptions.map((item) => computeBasePrice(filters.duration, item.bedType, {
+        hourlyPrice: item.hourlyPrice,
+        overnightPrice: item.overnightPrice,
+        overdayPrice: item.overdayPrice,
+    }));
+    const priceCandidates = basePriceCandidates.map((amount) => applyPercentSurcharge(
+        applyCommission(applyDemandMultiplier(amount, demandMultiplierPercent), ownerCommissionPercent),
+        futureBookingSurchargePercent
+    ));
+    const hourlyPriceCandidates = filteredBedOptions.map((item) => item.displayHourlyPrice);
+    const overnightPriceCandidates = filteredBedOptions.map((item) => item.displayOvernightPrice);
+    const baseHourlyPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("hourly", item.bedType, {
+        hourlyPrice: item.hourlyPrice,
+        overnightPrice: item.overnightPrice,
+        overdayPrice: item.overdayPrice,
+    }));
+    const baseOvernightPriceCandidates = filteredBedOptions.map((item) => computeBasePrice("overnight", item.bedType, {
+        hourlyPrice: item.hourlyPrice,
+        overnightPrice: item.overnightPrice,
+        overdayPrice: item.overdayPrice,
+    }));
+    const baseMinFinalPrice = Math.min(...basePriceCandidates);
+    const baseMinHourlyPrice = Math.min(...baseHourlyPriceCandidates);
+    const baseMinOvernightPrice = Math.min(...baseOvernightPriceCandidates);
+    const minFinalPrice = Math.min(...priceCandidates);
+    const minHourlyPrice = Math.min(...hourlyPriceCandidates);
+    const minOvernightPrice = Math.min(...overnightPriceCandidates);
+    if (filters.maxFinalPrice && minFinalPrice > filters.maxFinalPrice) {
+        return null;
+    }
+    const distanceFromUserKm = context.hasUserLocation
+        ? distanceKmBetween(context.userLocation, { lat: property.lat, lng: property.lng })
+        : null;
+    const realAvailableBeds = filteredBedOptions.length;
+    const ratedBeds = filteredBedOptions.filter((item) => Number(item.ratingCount ?? 0) > 0);
+    const totalRatingCount = ratedBeds.reduce((total, item) => total + Number(item.ratingCount ?? 0), 0);
+    const totalRatingValue = ratedBeds.reduce((total, item) => total + (Number(item.ratingAverage ?? 0) * Number(item.ratingCount ?? 0)), 0);
+    const listingRatingAverage = totalRatingCount > 0 ? Math.round((totalRatingValue / totalRatingCount) * 10) / 10 : 0;
+    const shownAvailableBeds = context.scarcityEnabled && context.scarcityValue > 0
+        ? Math.min(realAvailableBeds, context.scarcityValue)
+        : realAvailableBeds;
+    const recommendedBed = chooseRecommendedBed(filteredBedOptions, filters.duration);
+
+    return {
+        propertyId: property.id,
+        propertyName: property.name,
+        cityName: property.cityName,
+        exactAddress: property.exactAddress,
+        lat: property.lat,
+        lng: property.lng,
+        nearRailwayKm: property.nearRailwayKm,
+        nearBusKm: property.nearBusKm,
+        nearRailwayName: property.nearRailwayName,
+        nearBusName: property.nearBusName,
+        nearestTransitType: property.nearestTransitType,
+        nearestTransitName: property.nearestTransitName,
+        nearestTransitKm: property.nearestTransitKm,
+        distanceFromUserKm,
+        availableBeds: realAvailableBeds,
+        shownAvailableBeds,
+        scarcityApplied: context.scarcityEnabled && shownAvailableBeds < realAvailableBeds,
+        acBeds: filteredBedOptions.filter((item) => item.bedType === "AC").length,
+        nonAcBeds: filteredBedOptions.filter((item) => item.bedType === "NON_AC").length,
+        baseMinFinalPrice,
+        baseMinHourlyPrice,
+        baseMinOvernightPrice,
+        minFinalPrice,
+        minHourlyPrice,
+        minOvernightPrice,
+        platformFeeInr: context.platformFeeInr,
+        bookingMode: String(filters.bookingMode ?? "").toLowerCase() === "future" ? "future" : "now",
+        futureBookingSurchargePercent,
+        priceLabel,
+        demandActive: Boolean(demandSummary.active),
+        demandWarningActive: Boolean(demandSummary.warningActive),
+        demandMultiplierPercent,
+        demandSource: demandSummary.source,
+        demandReason: demandSummary.reason,
+        demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
+        ratingAverage: listingRatingAverage,
+        ratingCount: totalRatingCount,
+        recommendedBedId: recommendedBed?.bedId ?? "",
+        recommendedBedCode: recommendedBed?.bedCode ?? "",
+        recommendedBedType: recommendedBed?.bedType ?? "",
+        recommendedBedPrice: recommendedBed ? priceForDuration(filters.duration, recommendedBed) : 0,
+        recommendedBedRatingAverage: Number(recommendedBed?.ratingAverage ?? 0),
+        recommendedBedRatingCount: Number(recommendedBed?.ratingCount ?? 0),
+        bedOptions: filteredBedOptions,
+    };
+}
+
+export async function getListingsByCity(filters) {
+    const context = await readListingContext(filters);
+    const propertiesQuery = query(collection(db, COLLECTIONS.properties), where("cityId", "==", filters.cityId), where("status", "==", "active"));
+    const propertySnapshot = await getDocs(propertiesQuery);
+    const properties = propertySnapshot.docs.map(readPropertyListingDoc);
+    const listings = [];
+
+    for (const property of properties) {
+        const listing = await buildListingForProperty(property, filters, context);
+        if (listing) {
+            listings.push(listing);
+        }
+    }
+
     return listings.sort((a, b) => {
-        if (hasUserLocation) {
+        if (context.hasUserLocation) {
             const distanceA = Number.isFinite(Number(a.distanceFromUserKm)) ? Number(a.distanceFromUserKm) : Number.POSITIVE_INFINITY;
             const distanceB = Number.isFinite(Number(b.distanceFromUserKm)) ? Number(b.distanceFromUserKm) : Number.POSITIVE_INFINITY;
             if (distanceA !== distanceB) {
@@ -659,6 +802,29 @@ export async function getListingsByCity(filters) {
         return a.minFinalPrice - b.minFinalPrice;
     });
 }
+
+export async function getListingByPropertyForBooking(filters) {
+    if (!filters.cityId || !filters.propertyId) {
+        return null;
+    }
+
+    const [context, propertySnap] = await Promise.all([
+        readListingContext(filters),
+        getDoc(doc(db, COLLECTIONS.properties, filters.propertyId)),
+    ]);
+
+    if (!propertySnap.exists()) {
+        return null;
+    }
+
+    const property = readPropertyListingDoc(propertySnap);
+    if (property.cityId !== filters.cityId || property.status !== "active") {
+        return null;
+    }
+
+    return buildListingForProperty(property, filters, context);
+}
+
 export async function createBookingWithAdvance(payload) {
     const result = await createBookingWithAdvanceCallable(payload);
     if (!result || !result.bookingId) {
@@ -671,6 +837,26 @@ export async function createBookingWithAdvance(payload) {
         allocatedBedId: String(result.allocatedBedId || ""),
         allocatedBedCode: String(result.allocatedBedCode || ""),
         allocatedBedType: String(result.allocatedBedType || ""),
+    };
+}
+
+export async function modifyConfirmedBooking(payload) {
+    const result = await modifyConfirmedBookingCallable(payload);
+    if (!result || !result.bookingId) {
+        throw new Error("Could not modify booking.");
+    }
+    return {
+        bookingId: String(result.bookingId),
+        bookingCode: String(result.bookingCode || result.bookingId),
+        allocatedBedId: String(result.allocatedBedId || ""),
+        allocatedBedCode: String(result.allocatedBedCode || ""),
+        allocatedBedType: String(result.allocatedBedType || ""),
+        checkInAt: String(result.checkInAt || ""),
+        bookingMode: String(result.bookingMode || ""),
+        bedAmount: Number(result.bedAmount ?? 0),
+        platformFeeAmount: Number(result.platformFeeAmount ?? 0),
+        totalAmount: Number(result.totalAmount ?? 0),
+        remainingPaid: Number(result.remainingPaid ?? 0),
     };
 }
 
@@ -697,6 +883,15 @@ export async function getOpenConsumerBookings(userId) {
                 bedId: String(data.bedId ?? ""),
                 checkInAt: String(data.checkInAt ?? ""),
                 bookingStatus: String(data.bookingStatus ?? ""),
+                bookingMode: String(data.bookingMode ?? "now"),
+                modifiedCount: Number(data.modifiedCount ?? 0),
+                modifiedAt: data.modifiedAt ?? null,
+                bedIssueStatus: String(data.bedIssueStatus ?? ""),
+                bedIssueReportedAt: data.bedIssueReportedAt ?? null,
+                bedIssueLastReportId: String(data.bedIssueLastReportId ?? ""),
+                futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
                 checkInMs: toMillisFromDateTime(data.checkInAt),
             };
         })
@@ -709,8 +904,9 @@ export async function getOpenConsumerBookings(userId) {
     const uniquePropertyIds = [...new Set(openBookings.map((item) => item.propertyId).filter(Boolean))];
     const uniqueRoomIds = [...new Set(openBookings.map((item) => item.roomId).filter(Boolean))];
     const uniqueBedIds = [...new Set(openBookings.map((item) => item.bedId).filter(Boolean))];
+    const openBookingIds = openBookings.map((item) => item.id).filter(Boolean);
 
-    const [propertyEntries, roomEntries, bedEntries] = await Promise.all([
+    const [propertyEntries, roomEntries, bedEntries, propertyBedEntries, paymentEntries] = await Promise.all([
         Promise.all(uniquePropertyIds.map(async (id) => {
             const snapshot = await getDoc(doc(db, COLLECTIONS.properties, id));
             return [id, snapshot.exists() ? snapshot.data() : null];
@@ -723,15 +919,40 @@ export async function getOpenConsumerBookings(userId) {
             const snapshot = await getDoc(doc(db, COLLECTIONS.beds, id));
             return [id, snapshot.exists() ? snapshot.data() : null];
         })),
+        Promise.all(uniquePropertyIds.map(async (id) => {
+            const snapshot = await getDocs(query(collection(db, COLLECTIONS.beds), where("propertyId", "==", id)));
+            const options = snapshot.docs
+                .map((docItem) => {
+                    const data = docItem.data() || {};
+                    return {
+                        bedId: docItem.id,
+                        roomId: String(data.roomId ?? ""),
+                        bedCode: String(data.bedCode ?? ""),
+                        bedType: String(data.bedType ?? "NON_AC"),
+                        active: data.active !== false,
+                    };
+                })
+                .filter((item) => item.active)
+                .sort((a, b) => a.bedCode.localeCompare(b.bedCode));
+            return [id, options];
+        })),
+        Promise.all(openBookingIds.map(async (id) => {
+            const snapshot = await getDocs(query(collection(db, COLLECTIONS.payments), where("bookingId", "==", id)));
+            return [id, snapshot.empty ? null : paymentSummary(snapshot.docs[0].data())];
+        })),
     ]);
 
     const propertyMap = Object.fromEntries(propertyEntries);
     const roomMap = Object.fromEntries(roomEntries);
     const bedMap = Object.fromEntries(bedEntries);
+    const propertyBedMap = Object.fromEntries(propertyBedEntries);
+    const paymentMap = Object.fromEntries(paymentEntries);
 
     return openBookings
         .map((item) => {
             const bed = bedMap[item.bedId] ?? {};
+            const payment = paymentMap[item.id] ?? {};
+            const bookingMode = item.bookingMode || payment.bookingMode || "now";
             return {
                 ...item,
                 propertyName: String(propertyMap[item.propertyId]?.name ?? ""),
@@ -739,10 +960,46 @@ export async function getOpenConsumerBookings(userId) {
                 bedCode: String(bed?.bedCode ?? ""),
                 bedType: String(bed?.bedType ?? "NON_AC"),
                 hourlyPrice: Number(bed?.hourlyPrice ?? 120),
+                bookingMode,
+                bookingModeLabel: bookingModeLabel(bookingMode),
+                futureBookingSurchargePercent: Number(payment.futureBookingSurchargePercent ?? item.futureBookingSurchargePercent ?? 0),
+                futureBookingSurchargeAmount: Number(payment.futureBookingSurchargeAmount ?? item.futureBookingSurchargeAmount ?? 0),
+                futureBookingPriceLabel: String(payment.futureBookingPriceLabel ?? item.futureBookingPriceLabel ?? ""),
+                bedAmount: Number(payment.bedAmount ?? 0),
+                platformFeeAmount: Number(payment.platformFeeAmount ?? 0),
+                totalAmount: Number(payment.totalAmount ?? 0),
+                bedOptions: (propertyBedMap[item.propertyId] ?? []).map((option) => ({
+                    ...option,
+                    roomName: String(roomMap[option.roomId]?.roomName ?? ""),
+                })),
+                canModify: String(item.bookingStatus ?? "").toLowerCase() === "confirmed" && (item.checkInMs ?? 0) > Date.now(),
                 canCheckIn: String(item.bookingStatus ?? "").toLowerCase() === "confirmed" && (item.checkInMs ?? 0) <= Date.now(),
+                canReportBedIssue: String(item.bookingStatus ?? "").toLowerCase() === "checked_in",
             };
         })
         .sort((a, b) => (toMillisFromDateTime(b.checkInAt) ?? 0) - (toMillisFromDateTime(a.checkInAt) ?? 0));
+}
+
+export async function reportBedIssue(payload) {
+    const result = await reportBedIssueCallable(payload);
+    if (!result || !result.bookingId) {
+        throw new Error("Could not report the bed issue.");
+    }
+    return {
+        bookingId: String(result.bookingId),
+        bookingCode: String(result.bookingCode || result.bookingId),
+        reportId: String(result.reportId || ""),
+        status: String(result.status || ""),
+        message: String(result.message || ""),
+        replacementType: String(result.replacementType || ""),
+        replacementPropertyId: String(result.replacementPropertyId || ""),
+        replacementPropertyName: String(result.replacementPropertyName || ""),
+        replacementRoomId: String(result.replacementRoomId || ""),
+        replacementRoomName: String(result.replacementRoomName || ""),
+        replacementBedId: String(result.replacementBedId || ""),
+        replacementBedCode: String(result.replacementBedCode || ""),
+        repeatedIssueCount: Number(result.repeatedIssueCount ?? 0),
+    };
 }
 
 export async function checkInConfirmedBooking(payload) {

@@ -1,5 +1,33 @@
 # Work Log
 
+## 2026-05-07
+
+### Completed
+- Added Future Booking support for check-in within 30 days, with a 10% future booking price surcharge shown as one final consumer price.
+- Updated booking confirmation to send booking mode to the backend and lock future booking surcharge metadata on booking/payment records.
+- Updated availability metadata so future bookings can carry a same-day hold window while checkout still resolves the actual stay.
+- Extended Future Booking visibility across consumer open bookings/history, owner dashboard/history, and operator/superadmin operational snapshots.
+- Added operator/superadmin platform setting control for Future Booking surcharge percent.
+- Added consumer modify-booking support before check-in with backend availability validation, price relock, and modified booking visibility for consumer/owner views.
+- Fixed local UI smoke permission noise by allowing public-safe pre-login listing reads while keeping bookings, payments, users, and internal platform settings protected.
+- Added a localhost-only consumer listing smoke fallback so `?devAuth=consumer` can exercise Book Now, Future Booking, and Choose Bed UI without needing live Firebase Auth.
+- Added checked-in bed issue reporting: backend records bed reports, tries same-property reassignment first, then nearby same-city property beds, flags repeated problem beds, and notifies owner/operator when review is needed.
+- Removed the hard Aadhaar booking requirement from the consumer flow.
+- Changed booking review to show Aadhaar as optional instead of blocking repeat bookings.
+- Updated consumer, login, register, profile, TODO, and masterbook copy so Aadhaar is now framed as a soft add-if-you-have-it prompt.
+- Added a localhost-only dev auth bypass using `?devAuth=consumer|owner|operator|superadmin` for smoke testing.
+- Added a localhost-only dev booking preview so the booking page can render review-step copy without a live Firebase auth session.
+- Smoked the booking page in Chromium with the dev bypass and confirmed the optional Aadhaar copy renders on the review step.
+- Added a read-only superadmin history panel in the internal control UI.
+- Removed UI controls for creating, editing, or deleting superadmin accounts.
+- Added backend-only superadmin lifecycle script at `scripts/manage-superadmins.mjs` for create, disable, delete, and list operations.
+- Switched the superadmin history tab to a generated snapshot module so the static-export build no longer hits Firestore permission errors in the browser.
+- Verified the internal control UI smoke test now renders the superadmin history row with no create/edit/delete actions.
+- Added a safer operator-promotion UI flow that requires an explicit `PROMOTE OPERATOR` acknowledgement before saving.
+
+### Notes
+- Consumers can still add Aadhaar later from Profile if they want it saved for repeat-booking convenience.
+
 ## 2026-05-05
 
 ### Completed
@@ -137,9 +165,10 @@
   - checkout shows actual stay time and collects payment
   - stays under 15 minutes cancel without payment
   - stays from 15 minutes up to less than 60 minutes are charged as a full hour
-  - Aadhaar is required from the second booking onward
+  - Aadhaar is optional in the booking flow and can be added later from Profile for repeat-booking convenience
   - train tracking is a future feature using train number or PNR
   - third-party Aadhaar verification is a future feature
+- Added an "On Demand Logic" section to `docs/TODO.md` so the completed search, pricing, check-in, checkout, and OTP resend rules are easy to track
 - Fixed review findings in the consumer booking flow:
   - initial search now applies URL filters before fetching listings
   - check-in minimum updates over time instead of freezing at page load
@@ -148,7 +177,7 @@
 - Added a dedicated `/booking` page for the consumer booking path:
   - `Book This` now routes from listing cards into `/booking` with city, property, duration, and bed-filter context
   - consumers choose the exact bed and start time before review
-  - Aadhaar appears only in the review step when the repeat-booking rule requires it
+  - Aadhaar appears only as an optional review-step prompt when the user wants it saved
   - `Modify Timings` returns the consumer to the bed/time step before final confirmation
   - advance booking is limited to the next 24 hours
 - Preserved full query-string booking intent through protected-route login redirects so selected booking context survives authentication

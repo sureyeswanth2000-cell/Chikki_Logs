@@ -65,6 +65,53 @@ function readBookingCode(data, bookingId) {
     }
     return bookingCodeFor(bookingId);
 }
+
+function bookingModeLabel(value) {
+    return String(value ?? "").toLowerCase() === "future" ? "Future Booking" : "Book Now";
+}
+
+function bookingModeFields(data = {}, payment = {}) {
+    const bookingMode = String(data.bookingMode ?? payment.bookingMode ?? "now");
+    return {
+        bookingMode,
+        bookingModeLabel: bookingModeLabel(bookingMode),
+        futureBookingSurchargePercent: Number(payment.futureBookingSurchargePercent ?? data.futureBookingSurchargePercent ?? 0),
+        futureBookingSurchargeAmount: Number(payment.futureBookingSurchargeAmount ?? data.futureBookingSurchargeAmount ?? 0),
+        futureBookingPriceLabel: String(payment.futureBookingPriceLabel ?? data.futureBookingPriceLabel ?? ""),
+        totalAmount: Number(payment.totalAmount ?? 0),
+        bedAmount: Number(payment.bedAmount ?? 0),
+        platformFeeAmount: Number(payment.platformFeeAmount ?? 0),
+    };
+}
+
+async function paymentSummaryByBookingIds(bookingIds = []) {
+    const ids = [...new Set(bookingIds.filter(Boolean))];
+    if (ids.length === 0) {
+        return {};
+    }
+    const snapshots = await Promise.all(
+        chunkArray(ids, 10).map((batch) =>
+            getDocs(query(collection(db, COLLECTIONS.payments), where("bookingId", "in", batch)))
+        )
+    );
+    const entries = snapshots
+        .flatMap((snapshot) => snapshot.docs.map((item) => item.data()))
+        .map((data) => [
+            String(data.bookingId ?? ""),
+            {
+                bookingMode: String(data.bookingMode ?? ""),
+                futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
+                totalAmount: Number(data.totalAmount ?? 0),
+                bedAmount: Number(data.bedAmount ?? 0),
+                platformFeeAmount: Number(data.platformFeeAmount ?? 0),
+                advancePaid: Number(data.advancePaid ?? 0),
+            },
+        ])
+        .filter(([id]) => id);
+    return Object.fromEntries(entries);
+}
 export async function getActiveCities() {
     const q = query(collection(db, COLLECTIONS.cities), where("active", "==", true));
     const snapshot = await getDocs(q);
@@ -100,6 +147,11 @@ export async function createProperty(ownerId, payload) {
         lng: payload.lng,
         nearRailwayKm: payload.nearRailwayKm,
         nearBusKm: payload.nearBusKm,
+        nearRailwayName: payload.nearRailwayName ?? "",
+        nearBusName: payload.nearBusName ?? "",
+        nearestTransitType: payload.nearestTransitType ?? "",
+        nearestTransitName: payload.nearestTransitName ?? "",
+        nearestTransitKm: payload.nearestTransitKm ?? null,
         status: "active",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -121,6 +173,11 @@ export async function getOwnerProperties(ownerId) {
             lng: Number(data.lng ?? 0),
             nearRailwayKm: Number(data.nearRailwayKm ?? 0),
             nearBusKm: Number(data.nearBusKm ?? 0),
+            nearRailwayName: String(data.nearRailwayName ?? ""),
+            nearBusName: String(data.nearBusName ?? ""),
+            nearestTransitType: String(data.nearestTransitType ?? ""),
+            nearestTransitName: String(data.nearestTransitName ?? ""),
+            nearestTransitKm: Number(data.nearestTransitKm ?? 0),
             status: String(data.status ?? "active"),
         };
     });
@@ -466,6 +523,11 @@ export async function updateProperty(propertyId, payload) {
         lng: payload.lng,
         nearRailwayKm: payload.nearRailwayKm,
         nearBusKm: payload.nearBusKm,
+        nearRailwayName: payload.nearRailwayName ?? "",
+        nearBusName: payload.nearBusName ?? "",
+        nearestTransitType: payload.nearestTransitType ?? "",
+        nearestTransitName: payload.nearestTransitName ?? "",
+        nearestTransitKm: payload.nearestTransitKm ?? null,
         updatedAt: serverTimestamp(),
     });
 }
@@ -534,6 +596,12 @@ export async function getOwnerBookingHistory(ownerId, filters = {}) {
                 checkInAt,
                 checkOutAt,
                 bookingStatus,
+                bookingMode: String(data.bookingMode ?? "now"),
+                modifiedCount: Number(data.modifiedCount ?? 0),
+                modifiedAt: data.modifiedAt ?? null,
+                futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
                 duration: String(data.duration ?? ""),
                 ratingOverall: Number(data.ratingOverall ?? 0),
                 ratingComment: String(data.ratingComment ?? ""),
@@ -559,6 +627,11 @@ export async function getOwnerBookingHistory(ownerId, filters = {}) {
     }
 
     filtered.sort((a, b) => (b.checkInMs ?? 0) - (a.checkInMs ?? 0));
+    const paymentMap = await paymentSummaryByBookingIds(filtered.map((item) => item.id));
+    filtered = filtered.map((item) => ({
+        ...item,
+        ...bookingModeFields(item, paymentMap[item.id]),
+    }));
 
     const dailyMap = new Map();
     filtered.forEach((item) => {
@@ -601,7 +674,7 @@ export async function getOwnerLiveJobs(ownerId) {
         )
     );
 
-    return snapshots.flatMap((snapshot) =>
+    const liveJobs = snapshots.flatMap((snapshot) =>
         snapshot.docs
             .map((item) => {
                 const data = item.data();
@@ -621,10 +694,21 @@ export async function getOwnerLiveJobs(ownerId) {
                     checkInAt,
                     checkOutAt,
                     bookingStatus,
+                    bookingMode: String(data.bookingMode ?? "now"),
+                    modifiedCount: Number(data.modifiedCount ?? 0),
+                    modifiedAt: data.modifiedAt ?? null,
+                    futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                    futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                    futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
                 };
             })
             .filter(Boolean)
     ).sort((a, b) => (toMillisFromDateTime(a.checkInAt) ?? 0) - (toMillisFromDateTime(b.checkInAt) ?? 0));
+    const paymentMap = await paymentSummaryByBookingIds(liveJobs.map((item) => item.id));
+    return liveJobs.map((item) => ({
+        ...item,
+        ...bookingModeFields(item, paymentMap[item.id]),
+    }));
 }
 
 export async function getOwnerUpcomingBookings(ownerId) {
@@ -674,6 +758,12 @@ export async function getOwnerUpcomingBookings(ownerId) {
                 roomId: String(data.roomId ?? ""),
                 bedId: String(data.bedId ?? ""),
                 bookingStatus: String(data.bookingStatus ?? ""),
+                bookingMode: String(data.bookingMode ?? "now"),
+                modifiedCount: Number(data.modifiedCount ?? 0),
+                modifiedAt: data.modifiedAt ?? null,
+                futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
                 checkInAt,
                 checkOutAt,
                 checkInMs: toMillisFromDateTime(checkInAt),
@@ -705,6 +795,7 @@ export async function getOwnerUpcomingBookings(ownerId) {
 
     const activeBookingIds = activeBookings.map((item) => item.id);
     let advanceCollected = 0;
+    let paymentMap = {};
 
     if (activeBookingIds.length > 0) {
         const paymentSnapshots = await Promise.all(
@@ -713,13 +804,20 @@ export async function getOwnerUpcomingBookings(ownerId) {
             )
         );
 
-        advanceCollected = paymentSnapshots
-            .flatMap((snapshot) => snapshot.docs.map((docItem) => docItem.data()))
+        const payments = paymentSnapshots.flatMap((snapshot) => snapshot.docs.map((docItem) => docItem.data()));
+        paymentMap = Object.fromEntries(payments.map((payment) => [
+            String(payment.bookingId ?? ""),
+            payment,
+        ]).filter(([id]) => id));
+        advanceCollected = payments
             .reduce((sum, payment) => sum + Number(payment.advancePaid ?? 0), 0);
     }
 
     return {
-        upcomingBookings,
+        upcomingBookings: upcomingBookings.map((item) => ({
+            ...item,
+            ...bookingModeFields(item, paymentMap[item.id]),
+        })),
         advanceCollected,
         activeBookingCount: activeBookings.length,
     };
@@ -858,6 +956,12 @@ export async function getOwnerCheckoutAlerts(ownerId) {
                     roomName: roomMap[String(data.roomId ?? "")]?.roomName ?? "",
                     bedCode: bedMap[String(data.bedId ?? "")]?.bedCode ?? "",
                     bookingStatus: String(data.bookingStatus ?? ""),
+                    bookingMode: String(data.bookingMode ?? "now"),
+                    modifiedCount: Number(data.modifiedCount ?? 0),
+                    modifiedAt: data.modifiedAt ?? null,
+                    futureBookingSurchargePercent: Number(data.futureBookingSurchargePercent ?? 0),
+                    futureBookingSurchargeAmount: Number(data.futureBookingSurchargeAmount ?? 0),
+                    futureBookingPriceLabel: String(data.futureBookingPriceLabel ?? ""),
                     checkInAt: String(data.checkInAt ?? ""),
                     checkOutAt: String(data.checkOutAt ?? ""),
                 };
@@ -865,7 +969,12 @@ export async function getOwnerCheckoutAlerts(ownerId) {
             .filter(Boolean)
     ).sort((a, b) => (toMillisFromDateTime(b.checkOutAt) ?? 0) - (toMillisFromDateTime(a.checkOutAt) ?? 0));
 
-    return alertBookings.slice(0, 20);
+    const sliced = alertBookings.slice(0, 20);
+    const paymentMap = await paymentSummaryByBookingIds(sliced.map((item) => item.id));
+    return sliced.map((item) => ({
+        ...item,
+        ...bookingModeFields(item, paymentMap[item.id]),
+    }));
 }
 
 export async function getOwnerProfile(ownerId) {

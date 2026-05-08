@@ -136,6 +136,26 @@ export async function createBookingWithAdvance(payload) {
   }
 }
 
+export async function modifyConfirmedBooking(payload) {
+  const callable = httpsCallable(functionsClient(), "modifyConfirmedBooking");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not modify booking."));
+  }
+}
+
+export async function reportBedIssue(payload) {
+  const callable = httpsCallable(functionsClient(), "reportBedIssue");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not report the bed issue."));
+  }
+}
+
 export async function submitBookingRating(payload) {
   const callable = httpsCallable(functionsClient(), "submitBookingRating");
   try {

@@ -204,6 +204,7 @@ export default function HistoryPage() {
                       <th className="px-3 py-2 font-semibold">Property</th>
                       {isOwnerHistory && <th className="px-3 py-2 font-semibold">Room</th>}
                       <th className="px-3 py-2 font-semibold">Bed</th>
+                      <th className="px-3 py-2 font-semibold">Type</th>
                       <th className="px-3 py-2 font-semibold">Check-In</th>
                       <th className="px-3 py-2 font-semibold">Check-Out</th>
                       <th className="px-3 py-2 font-semibold">Status</th>
@@ -215,7 +216,7 @@ export default function HistoryPage() {
                   <tbody>
                     {result.bookings.length === 0 && (
                       <tr>
-                        <td colSpan={isOwnerHistory ? 9 : 9} className="px-3 py-4 text-center text-slate-500">
+                        <td colSpan={10} className="px-3 py-4 text-center text-slate-500">
                           No booking details found.
                         </td>
                       </tr>
@@ -237,6 +238,14 @@ export default function HistoryPage() {
                         <td className="px-3 py-2 text-slate-700">{item.propertyName || "-"}</td>
                         {isOwnerHistory && <td className="px-3 py-2 text-slate-700">{item.roomName || "-"}</td>}
                         <td className="px-3 py-2 text-slate-700">{item.bedCode || "-"}</td>
+                        <td className="px-3 py-2">
+                          <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-semibold ${String(item.bookingMode).toLowerCase() === "future" ? "bg-sky-100 text-sky-700" : "bg-slate-100 text-slate-700"}`}>
+                            {item.bookingModeLabel || (String(item.bookingMode).toLowerCase() === "future" ? "Future Booking" : "Book Now")}
+                          </span>
+                          {Number(item.modifiedCount ?? 0) > 0 ? (
+                            <p className="mt-1 text-[11px] font-semibold text-sky-700">Modified</p>
+                          ) : null}
+                        </td>
                         <td className="px-3 py-2 text-slate-700">{item.checkInAt || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.checkOutAt || "-"}</td>
                         <td className="px-3 py-2 text-slate-700">{item.bookingStatus || "-"}</td>
@@ -247,12 +256,12 @@ export default function HistoryPage() {
                               <div className="text-xs">
                                 {item.bedAmount != null && item.platformFeeAmount != null ? (
                                   <>
-                                    <p className="text-slate-500">Bed: ₹{item.bedAmount}</p>
-                                    <p className="text-slate-500">Fee: ₹{item.platformFeeAmount}</p>
-                                    <p className="font-semibold text-slate-800">Total: ₹{item.totalAmount}</p>
+                                    <p className="text-slate-500">{String(item.bookingMode).toLowerCase() === "future" ? "Future booking price" : "Bed"}: INR {item.bedAmount}</p>
+                                    <p className="text-slate-500">Fee: INR {item.platformFeeAmount}</p>
+                                    <p className="font-semibold text-slate-800">Total: INR {item.totalAmount}</p>
                                   </>
                                 ) : (
-                                  <p className="font-semibold text-slate-800">₹{item.totalAmount}</p>
+                                  <p className="font-semibold text-slate-800">INR {item.totalAmount}</p>
                                 )}
                               </div>
                             ) : (

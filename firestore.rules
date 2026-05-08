@@ -45,6 +45,10 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/properties/$(propertyId));
     }
 
+    function isActiveProperty(propertyId) {
+      return propertyDoc(propertyId).data.status == "active";
+    }
+
     match /cities/{cityId} {
       allow read: if true;
       allow write: if isInternalOperator();
@@ -80,25 +84,31 @@ service cloud.firestore {
     }
 
     match /properties/{propertyId} {
-      allow read: if isSignedIn();
+      allow read: if resource.data.status == "active" || isSignedIn();
       allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
     }
 
     match /rooms/{roomId} {
-      allow read: if isSignedIn();
+      allow read: if isActiveProperty(resource.data.propertyId) || isSignedIn();
       allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
     }
 
     match /beds/{bedId} {
-      allow read: if isSignedIn();
+      allow read: if (
+          resource.data.active != false &&
+          isActiveProperty(resource.data.propertyId)
+        ) || isSignedIn();
       allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
     }
 
     match /bed_blocks/{blockId} {
-      allow read: if isSignedIn();
+      allow read: if (
+          resource.data.active == true &&
+          isActiveProperty(resource.data.propertyId)
+        ) || isSignedIn();
       allow create: if isOwner() && request.resource.data.ownerId == request.auth.uid;
       allow update, delete: if isOwner() && resource.data.ownerId == request.auth.uid;
     }
@@ -109,8 +119,21 @@ service cloud.firestore {
       allow delete: if isSuperadmin();
     }
 
+    match /bed_issue_reports/{reportId} {
+      allow read: if isInternalOperator() ||
+        (
+          isSignedIn() &&
+          resource.data.userId == request.auth.uid
+        ) ||
+        (
+          isOwner() &&
+          propertyDoc(resource.data.propertyId).data.ownerId == request.auth.uid
+        );
+      allow create, update, delete: if false;
+    }
+
     match /booking_availability/{entryId} {
-      allow read: if isSignedIn();
+      allow read: if isActiveProperty(resource.data.propertyId) || isSignedIn();
       allow create: if isSuperadmin();
       allow update: if isSuperadmin() ||
         (
@@ -217,8 +240,8 @@ service cloud.firestore {
     }
 
     match /demand_pricing/{scopeId} {
-      // Consumers will need read access for final price labels; writes stay backend-only.
-      allow read: if isSignedIn();
+      // Public listing/search needs price warning labels before login; writes stay backend-only.
+      allow read: if true;
       allow write: if false;
     }
 

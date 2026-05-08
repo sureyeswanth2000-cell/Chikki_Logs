@@ -99,6 +99,11 @@ const MAX_CHECKIN_GRACE_MINUTES = 120;
 const DEFAULT_PLATFORM_BOOKING_FEE_INR = 9;
 const MIN_PLATFORM_BOOKING_FEE_INR = 0;
 const MAX_PLATFORM_BOOKING_FEE_INR = 999;
+const DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT = 10;
+const BOOK_NOW_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
+const FUTURE_BOOKING_MAX_ADVANCE_MS = 30 * 24 * 60 * 60 * 1000;
+const BED_ISSUE_REPORTS_COLLECTION = "bed_issue_reports";
+const BED_ISSUE_REVIEW_THRESHOLD = 3;
 const SCARCITY_MIN_BEDS = 1;
 const SCARCITY_MAX_BEDS = 5;
 const AADHAAR_VAULT_COLLECTION = "aadhaar_identity_vault";
@@ -153,6 +158,14 @@ function clampPlatformCommissionPercent(value) {
   return Math.max(MIN_PLATFORM_COMMISSION_PERCENT, Math.min(MAX_PLATFORM_COMMISSION_PERCENT, Math.round(parsed)));
 }
 
+function clampFutureBookingSurchargePercent(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT;
+  }
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
 async function readPlatformSettings() {
   const [platformSettingsSnap, legacySettingsSnap] = await Promise.all([
     db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID).get(),
@@ -175,6 +188,11 @@ async function readPlatformSettings() {
       Object.prototype.hasOwnProperty.call(data, "platformCommissionPercent")
         ? data.platformCommissionPercent
         : DEFAULT_PLATFORM_COMMISSION_PERCENT
+    ),
+    futureBookingSurchargePercent: clampFutureBookingSurchargePercent(
+      Object.prototype.hasOwnProperty.call(data, "futureBookingSurchargePercent")
+        ? data.futureBookingSurchargePercent
+        : legacyData.futureBookingSurchargePercent
     ),
   };
 }
@@ -470,6 +488,32 @@ function applyDemandMultiplier(baseAmount, multiplierPercent = 0) {
   const amount = Math.max(0, Number(baseAmount) || 0);
   const multiplier = Math.max(0, Number(multiplierPercent) || 0);
   return Math.round(amount * (1 + (multiplier / 100)));
+}
+
+function applyPercentSurcharge(baseAmount, surchargePercent = 0) {
+  const amount = Math.max(0, Number(baseAmount) || 0);
+  const surcharge = Math.max(0, Number(surchargePercent) || 0);
+  return Math.round(amount * (1 + (surcharge / 100)));
+}
+
+function bookingDayHoldEnd(checkInAt) {
+  const day = String(checkInAt ?? "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) {
+    return null;
+  }
+  return `${day}T23:59`;
+}
+
+function bookingAvailabilityEndMillis(booking) {
+  const status = String(booking?.bookingStatus ?? "").toLowerCase();
+  const checkOutMs = toMillisOrNull(booking?.checkOutAt);
+  if (checkOutMs !== null) {
+    return checkOutMs;
+  }
+  if (status === "checked_in") {
+    return Number.POSITIVE_INFINITY;
+  }
+  return toMillisOrNull(booking?.holdEndAt) ?? Number.POSITIVE_INFINITY;
 }
 
 function normalizedBedTypeRequirement(value) {
@@ -1445,7 +1489,8 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
   const input = request.data || {};
   const hasCheckInGraceMinutes = Object.prototype.hasOwnProperty.call(input, "checkInGraceMinutes");
   const hasPlatformFeeInr = Object.prototype.hasOwnProperty.call(input, "platformFeeInr");
-  if (!hasCheckInGraceMinutes && !hasPlatformFeeInr) {
+  const hasFutureBookingSurchargePercent = Object.prototype.hasOwnProperty.call(input, "futureBookingSurchargePercent");
+  if (!hasCheckInGraceMinutes && !hasPlatformFeeInr && !hasFutureBookingSurchargePercent) {
     throw new HttpsError("invalid-argument", "At least one platform setting is required.");
   }
   const currentSettings = await readPlatformSettings();
@@ -1455,11 +1500,15 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
   const nextPlatformFeeInr = hasPlatformFeeInr
     ? clampPlatformBookingFeeInr(input.platformFeeInr)
     : currentSettings.platformFeeInr;
+  const nextFutureBookingSurchargePercent = hasFutureBookingSurchargePercent
+    ? clampFutureBookingSurchargePercent(input.futureBookingSurchargePercent)
+    : currentSettings.futureBookingSurchargePercent;
 
   const settingsRef = db.collection(PLATFORM_SETTINGS_COLLECTION).doc(PLATFORM_SETTINGS_DOC_ID);
   await settingsRef.set({
     checkInGraceMinutes: nextCheckInGraceMinutes,
     platformFeeInr: nextPlatformFeeInr,
+    futureBookingSurchargePercent: nextFutureBookingSurchargePercent,
     updatedBy: callerUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -1473,6 +1522,7 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
     metadata: {
       checkInGraceMinutes: nextCheckInGraceMinutes,
       platformFeeInr: nextPlatformFeeInr,
+      futureBookingSurchargePercent: nextFutureBookingSurchargePercent,
     },
     createdAt: FieldValue.serverTimestamp(),
   });
@@ -1483,6 +1533,7 @@ exports.updatePlatformSettings = onCall({ cors: true }, async (request) => {
       checkInGraceMinutes: nextCheckInGraceMinutes,
       platformFeeInr: nextPlatformFeeInr,
       platformCommissionPercent: currentSettings.platformCommissionPercent,
+      futureBookingSurchargePercent: nextFutureBookingSurchargePercent,
     },
   };
 });
@@ -1952,6 +2003,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   const propertyId = String(listing.propertyId ?? "").trim();
   const duration = String(input.duration ?? "").trim();
   const checkInAt = String(input.checkInAt ?? "").trim();
+  const bookingMode = String(input.bookingMode ?? input.mode ?? "").trim().toLowerCase() === "future" ? "future" : "now";
   const requirementBedType = normalizedBedTypeRequirement(input.requirementBedType);
   const selectedBed = input.selectedBed || {};
   const requestedBedId = String(selectedBed.bedId ?? "").trim();
@@ -2012,10 +2064,24 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
   const demandMultiplierPercent = Math.max(0, Number(demandSummary.multiplierPercent ?? 0));
 
   const checkInMillis = toRequiredMillis(checkInAt, "check-in time");
-  if (checkInMillis < Date.now()) {
+  const nowMs = Date.now();
+  if (checkInMillis < nowMs) {
     throw new HttpsError("failed-precondition", "Check-in time cannot be in the past.");
   }
-  const requestedEndMillis = Number.POSITIVE_INFINITY;
+  const maxAdvanceMs = bookingMode === "future" ? FUTURE_BOOKING_MAX_ADVANCE_MS : BOOK_NOW_MAX_ADVANCE_MS;
+  if (checkInMillis > nowMs + maxAdvanceMs) {
+    throw new HttpsError(
+      "failed-precondition",
+      bookingMode === "future"
+        ? "Future Booking is limited to the next 30 days."
+        : "Book Now is limited to the next 24 hours."
+    );
+  }
+  const futureBookingSurchargePercent = bookingMode === "future"
+    ? clampFutureBookingSurchargePercent(platformSettings.futureBookingSurchargePercent)
+    : 0;
+  const holdEndAt = bookingMode === "future" ? bookingDayHoldEnd(checkInAt) : null;
+  const requestedEndMillis = holdEndAt ? (toMillisOrNull(holdEndAt) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
 
   const userRef = db.collection("users").doc(userId);
   const [userSnap, previousBookingsSnap] = await Promise.all([
@@ -2082,6 +2148,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
       bedId: String(item.data().bedId ?? ""),
       checkInAt: String(item.data().checkInAt ?? ""),
       checkOutAt: String(item.data().checkOutAt ?? ""),
+      holdEndAt: String(item.data().holdEndAt ?? ""),
       bookingStatus: String(item.data().bookingStatus ?? ""),
     }))
     .filter((item) => item.bookingStatus === "confirmed" || item.bookingStatus === "checked_in");
@@ -2098,7 +2165,7 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
       .filter((booking) => booking.bedId === candidate.bedId)
       .some((booking) => {
         const bookingStart = toMillisOrNull(booking.checkInAt);
-        const bookingEnd = toMillisOrNull(booking.checkOutAt) ?? Number.POSITIVE_INFINITY;
+        const bookingEnd = bookingAvailabilityEndMillis(booking);
         if (bookingStart === null) {
           return false;
         }
@@ -2124,6 +2191,10 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         demandMultiplierPercent
       ),
     }))
+    .map((bed) => ({
+      ...bed,
+      finalTotal: applyPercentSurcharge(bed.finalTotal, futureBookingSurchargePercent),
+    }))
     .sort((a, b) => (a.finalTotal !== b.finalTotal ? a.finalTotal - b.finalTotal : a.bedCode.localeCompare(b.bedCode)))[0];
 
   const durationBasePrice = computeBasePrice(duration, chosenBed.bedType, {
@@ -2131,14 +2202,17 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
     overnightPrice: chosenBed.overnightPrice,
     overdayPrice: chosenBed.overdayPrice,
   });
-  const durationRateLocked = applyDemandMultiplier(durationBasePrice, demandMultiplierPercent);
+  const durationRateBeforeFutureSurcharge = applyDemandMultiplier(durationBasePrice, demandMultiplierPercent);
+  const durationRateLocked = applyPercentSurcharge(durationRateBeforeFutureSurcharge, futureBookingSurchargePercent);
 
   const hourlyBasePrice = computeBasePrice("hourly", chosenBed.bedType, {
     hourlyPrice: chosenBed.hourlyPrice,
     overnightPrice: chosenBed.overnightPrice,
     overdayPrice: chosenBed.overdayPrice,
   });
-  const lockedHourlyRate = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
+  const lockedHourlyRateBeforeFutureSurcharge = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
+  const lockedHourlyRate = applyPercentSurcharge(lockedHourlyRateBeforeFutureSurcharge, futureBookingSurchargePercent);
+  const futureBookingSurchargeAmount = Math.max(0, durationRateLocked - durationRateBeforeFutureSurcharge);
 
   const bedAmount = durationRateLocked;
   const basePrice = durationBasePrice;
@@ -2184,9 +2258,14 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         roomId: chosenBed.roomId,
         bedId: chosenBed.bedId,
         duration,
+        bookingMode,
         checkInAt,
         checkOutAt: null,
+        holdEndAt,
         bookingStatus: "confirmed",
+        futureBookingSurchargePercent,
+        futureBookingSurchargeAmount,
+        futureBookingPriceLabel: bookingMode === "future" ? "Future booking price" : "",
         aadhaarRefId: aadhaarRefId || null,
         identityStatusAtBooking: aadhaarRefId ? aadhaarStatus || "submitted" : "not_required_first_booking",
         ownerCheckoutAlert: false,
@@ -2199,13 +2278,16 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         bedId: chosenBed.bedId,
         checkInAt,
         checkOutAt: null,
+        holdEndAt,
         bookingStatus: "confirmed",
+        bookingMode,
         createdAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
       });
 
       transaction.set(paymentRef, {
         bookingId: bookingRef.id,
+        bookingMode,
         basePrice,
         bedAmount,
         commissionAmount,
@@ -2223,11 +2305,16 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
         demandReason: demandSummary.reason,
         demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
         lockedDurationRate: durationRateLocked,
+        lockedDurationRateBeforeFutureSurcharge: durationRateBeforeFutureSurcharge,
         lockedHourlyRate,
+        lockedHourlyRateBeforeFutureSurcharge,
         lockedHourlyBaseRate: lockedHourlyRate,
         lockedPlatformHourlyRate: 0,
         lockedGatewayHourlyRate: 0,
         lockedBookingPlatformFeeInr: platformFeeInr,
+        futureBookingSurchargePercent,
+        futureBookingSurchargeAmount,
+        futureBookingPriceLabel: bookingMode === "future" ? "Future booking price" : "",
         priceLockedAt: FieldValue.serverTimestamp(),
         paymentStatus: "advance_paid_placeholder",
         createdAt: FieldValue.serverTimestamp(),
@@ -2248,6 +2335,9 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
           ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
           gatewayFeePercent: pricingConfig.gatewayFeePercent,
           platformFeeInr,
+          bookingMode,
+          futureBookingSurchargePercent,
+          futureBookingSurchargeAmount,
           demandActiveAtBooking: Boolean(demandSummary.active),
           demandWarningAtBooking: Boolean(demandSummary.warningActive),
           demandMultiplierPercent,
@@ -2277,6 +2367,688 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
     allocatedBedId: chosenBed.bedId,
     allocatedBedCode: chosenBed.bedCode,
     allocatedBedType: chosenBed.bedType,
+  };
+});
+
+exports.modifyConfirmedBooking = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const userId = request.auth.uid;
+  const input = request.data || {};
+  const bookingId = String(input.bookingId ?? "").trim();
+  const nextCheckInAt = String(input.checkInAt ?? "").trim();
+  const requestedBedId = String(input.bedId ?? input.selectedBedId ?? "").trim();
+
+  if (!bookingId) {
+    throw new HttpsError("invalid-argument", "bookingId is required.");
+  }
+  if (!nextCheckInAt) {
+    throw new HttpsError("invalid-argument", "Select a new check-in time.");
+  }
+
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  const bookingSnap = await bookingRef.get();
+  if (!bookingSnap.exists) {
+    throw new HttpsError("not-found", "Booking not found.");
+  }
+  const bookingData = bookingSnap.data() || {};
+  if (String(bookingData.userId ?? "") !== userId) {
+    throw new HttpsError("permission-denied", "You can modify only your own booking.");
+  }
+  const currentStatus = String(bookingData.bookingStatus ?? "").toLowerCase();
+  if (currentStatus !== "confirmed") {
+    throw new HttpsError("failed-precondition", "Only confirmed bookings can be modified before check-in.");
+  }
+  if (bookingData.checkOutAt) {
+    throw new HttpsError("failed-precondition", "Checked-out bookings cannot be modified.");
+  }
+  const currentCheckInMs = toRequiredMillis(bookingData.checkInAt, "current check-in time");
+  const nowMs = Date.now();
+  if (currentCheckInMs <= nowMs) {
+    throw new HttpsError("failed-precondition", "This booking can no longer be modified because check-in time has arrived.");
+  }
+
+  const propertyId = String(bookingData.propertyId ?? "").trim();
+  const previousBedId = String(bookingData.bedId ?? "").trim();
+  const nextBedId = requestedBedId || previousBedId;
+  const duration = ["hourly", "overnight", "overday"].includes(String(input.duration ?? bookingData.duration ?? ""))
+    ? String(input.duration ?? bookingData.duration)
+    : "hourly";
+  const bookingMode = String(bookingData.bookingMode ?? "now").toLowerCase() === "future" ? "future" : "now";
+  if (!propertyId || !nextBedId) {
+    throw new HttpsError("failed-precondition", "Booking is missing property or bed details.");
+  }
+
+  const nextCheckInMs = toRequiredMillis(nextCheckInAt, "check-in time");
+  if (nextCheckInMs < nowMs) {
+    throw new HttpsError("failed-precondition", "Check-in time cannot be in the past.");
+  }
+  const maxAdvanceMs = bookingMode === "future" ? FUTURE_BOOKING_MAX_ADVANCE_MS : BOOK_NOW_MAX_ADVANCE_MS;
+  if (nextCheckInMs > nowMs + maxAdvanceMs) {
+    throw new HttpsError(
+      "failed-precondition",
+      bookingMode === "future"
+        ? "Future Booking is limited to the next 30 days."
+        : "Book Now is limited to the next 24 hours."
+    );
+  }
+
+  const propertySnap = await db.collection("properties").doc(propertyId).get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const propertyData = propertySnap.data() || {};
+  const ownerId = String(propertyData.ownerId ?? "").trim();
+  const cityId = String(propertyData.cityId ?? "").trim();
+  const ownerSnap = ownerId ? await db.collection("users").doc(ownerId).get() : null;
+  const ownerData = ownerSnap && ownerSnap.exists ? (ownerSnap.data() || {}) : {};
+
+  const platformSettings = await readPlatformSettings();
+  const platformFeeInr = clampPlatformBookingFeeInr(platformSettings.platformFeeInr);
+  const pricingConfig = pricingConfigForOwner(ownerData, platformSettings.platformCommissionPercent);
+
+  const [propertyDemandSnap, cityDemandSnap] = await Promise.all([
+    db.collection(DEMAND_PRICING_COLLECTION).doc(demandScopeDocId("property", propertyId)).get(),
+    cityId
+      ? db.collection(DEMAND_PRICING_COLLECTION).doc(demandScopeDocId("city", cityId)).get()
+      : Promise.resolve(null),
+  ]);
+  const propertyDemandSummary = normalizeDemandSummaryData(propertyDemandSnap?.exists ? propertyDemandSnap.data() : null, "property");
+  const cityDemandSummary = normalizeDemandSummaryData(cityDemandSnap?.exists ? cityDemandSnap.data() : null, "city");
+  const demandSummary = chooseEffectiveDemandSummary(propertyDemandSummary, cityDemandSummary);
+  const demandMultiplierPercent = Math.max(0, Number(demandSummary.multiplierPercent ?? 0));
+  const futureBookingSurchargePercent = bookingMode === "future"
+    ? clampFutureBookingSurchargePercent(platformSettings.futureBookingSurchargePercent)
+    : 0;
+  const holdEndAt = bookingMode === "future" ? bookingDayHoldEnd(nextCheckInAt) : null;
+  const requestedEndMillis = holdEndAt ? (toMillisOrNull(holdEndAt) ?? Number.POSITIVE_INFINITY) : Number.POSITIVE_INFINITY;
+
+  const [bedSnap, blocksSnapshot, availabilitySnapshot, paymentSnapshot] = await Promise.all([
+    db.collection("beds").doc(nextBedId).get(),
+    db.collection("bed_blocks").where("propertyId", "==", propertyId).get(),
+    db.collection("booking_availability").where("propertyId", "==", propertyId).get(),
+    db.collection("payments").where("bookingId", "==", bookingId).limit(1).get(),
+  ]);
+
+  if (!bedSnap.exists) {
+    throw new HttpsError("not-found", "Selected bed was not found.");
+  }
+  const bedData = bedSnap.data() || {};
+  if (String(bedData.propertyId ?? "") !== propertyId || bedData.active === false) {
+    throw new HttpsError("failed-precondition", "Selected bed is not active for this property.");
+  }
+  const chosenBed = {
+    bedId: bedSnap.id,
+    roomId: String(bedData.roomId ?? ""),
+    bedCode: String(bedData.bedCode ?? ""),
+    bedType: String(bedData.bedType ?? "NON_AC"),
+    hourlyPrice: Number(bedData.hourlyPrice ?? 120),
+    overnightPrice: Number(bedData.overnightPrice ?? 650),
+    overdayPrice: Number(bedData.overdayPrice ?? 900),
+  };
+
+  const blocks = blocksSnapshot.docs
+    .map((item) => ({
+      bedId: String(item.data().bedId ?? ""),
+      blockStart: String(item.data().blockStart ?? ""),
+      blockEnd: typeof item.data().blockEnd === "string" ? item.data().blockEnd : null,
+      isFullBlock: Boolean(item.data().isFullBlock),
+      active: item.data().active !== false,
+    }))
+    .filter((item) => item.active);
+
+  const hasConflictingBlock = blocks
+    .filter((block) => block.bedId === nextBedId)
+    .some((block) => isBlockActiveForTime(block, nextCheckInMs, requestedEndMillis));
+  if (hasConflictingBlock) {
+    throw new HttpsError("failed-precondition", "Selected bed is blocked for that time.");
+  }
+
+  const hasBookingConflict = availabilitySnapshot.docs
+    .filter((item) => item.id !== bookingId)
+    .map((item) => ({
+      bedId: String(item.data().bedId ?? ""),
+      checkInAt: String(item.data().checkInAt ?? ""),
+      checkOutAt: String(item.data().checkOutAt ?? ""),
+      holdEndAt: String(item.data().holdEndAt ?? ""),
+      bookingStatus: String(item.data().bookingStatus ?? ""),
+    }))
+    .filter((item) => item.bedId === nextBedId)
+    .filter((item) => item.bookingStatus === "confirmed" || item.bookingStatus === "checked_in")
+    .some((item) => {
+      const bookingStart = toMillisOrNull(item.checkInAt);
+      if (bookingStart === null) {
+        return false;
+      }
+      return hasOverlap(nextCheckInMs, requestedEndMillis, bookingStart, bookingAvailabilityEndMillis(item));
+    });
+  if (hasBookingConflict) {
+    throw new HttpsError("failed-precondition", "Selected bed is already booked for that time.");
+  }
+
+  const durationBasePrice = computeBasePrice(duration, chosenBed.bedType, {
+    hourlyPrice: chosenBed.hourlyPrice,
+    overnightPrice: chosenBed.overnightPrice,
+    overdayPrice: chosenBed.overdayPrice,
+  });
+  const durationRateBeforeFutureSurcharge = applyDemandMultiplier(durationBasePrice, demandMultiplierPercent);
+  const durationRateLocked = applyPercentSurcharge(durationRateBeforeFutureSurcharge, futureBookingSurchargePercent);
+  const hourlyBasePrice = computeBasePrice("hourly", chosenBed.bedType, {
+    hourlyPrice: chosenBed.hourlyPrice,
+    overnightPrice: chosenBed.overnightPrice,
+    overdayPrice: chosenBed.overdayPrice,
+  });
+  const lockedHourlyRateBeforeFutureSurcharge = applyDemandMultiplier(hourlyBasePrice, demandMultiplierPercent);
+  const lockedHourlyRate = applyPercentSurcharge(lockedHourlyRateBeforeFutureSurcharge, futureBookingSurchargePercent);
+  const futureBookingSurchargeAmount = Math.max(0, durationRateLocked - durationRateBeforeFutureSurcharge);
+  const bedAmount = durationRateLocked;
+  const totalAmount = bedAmount + platformFeeInr;
+  const paymentDoc = paymentSnapshot.empty ? null : paymentSnapshot.docs[0];
+  const previousAdvancePaid = paymentDoc ? Number(paymentDoc.data()?.advancePaid ?? 100) : 100;
+  const remainingPaid = Math.max(totalAmount - previousAdvancePaid, 0);
+  const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingId);
+  const paymentRef = paymentDoc ? paymentDoc.ref : db.collection("payments").doc();
+  const lockRef = db.collection("bed_locks").doc(nextBedId);
+
+  await db.runTransaction(async (transaction) => {
+    const lockSnap = await transaction.get(lockRef);
+    const now = Date.now();
+    if (lockSnap.exists) {
+      const lockData = lockSnap.data() || {};
+      const lockedUntilMs = typeof lockData.lockedUntilMs === "number" ? lockData.lockedUntilMs : 0;
+      const lockedByBooking = String(lockData.bookingId ?? "") === bookingId;
+      if (lockedUntilMs > now && !lockedByBooking) {
+        throw new HttpsError("aborted", "This bed is currently being modified by another user. Please try again.");
+      }
+    }
+
+    const rate = await enforceRateLimit(transaction, `booking_modify_${userId}`, 8, 10 * 60 * 1000);
+    if (rate.limited) {
+      throw new HttpsError("resource-exhausted", "Too many booking changes. Wait a few minutes and try again.");
+    }
+
+    transaction.set(lockRef, {
+      userId,
+      lockedUntilMs: now + 30000,
+      bookingId,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(bookingRef, {
+      roomId: chosenBed.roomId,
+      bedId: chosenBed.bedId,
+      duration,
+      bookingMode,
+      checkInAt: nextCheckInAt,
+      holdEndAt,
+      futureBookingSurchargePercent,
+      futureBookingSurchargeAmount,
+      futureBookingPriceLabel: bookingMode === "future" ? "Future booking price" : "",
+      modifiedAt: FieldValue.serverTimestamp(),
+      modifiedCount: FieldValue.increment(1),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    transaction.set(bookingAvailabilityRef, {
+      propertyId,
+      bedId: chosenBed.bedId,
+      checkInAt: nextCheckInAt,
+      checkOutAt: null,
+      holdEndAt,
+      bookingStatus: "confirmed",
+      bookingMode,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    transaction.set(paymentRef, {
+      bookingId,
+      bookingMode,
+      basePrice: durationBasePrice,
+      bedAmount,
+      commissionAmount: 0,
+      gatewayAmount: 0,
+      platformFeeAmount: platformFeeInr,
+      platformFeePerBooking: platformFeeInr,
+      totalAmount,
+      advancePaid: previousAdvancePaid,
+      remainingPaid,
+      ownerRevenueSharePercent: pricingConfig.ownerRevenueSharePercent,
+      gatewayFeePercent: pricingConfig.gatewayFeePercent,
+      demandMultiplierPercent,
+      demandLabelSnapshot: demandSummary.active ? "high_demand" : "normal",
+      demandSource: demandSummary.source,
+      demandReason: demandSummary.reason,
+      demandOccupancyPercent: Number(demandSummary.occupancyPercent ?? 0),
+      lockedDurationRate: durationRateLocked,
+      lockedDurationRateBeforeFutureSurcharge: durationRateBeforeFutureSurcharge,
+      lockedHourlyRate,
+      lockedHourlyRateBeforeFutureSurcharge,
+      lockedHourlyBaseRate: lockedHourlyRate,
+      lockedPlatformHourlyRate: 0,
+      lockedGatewayHourlyRate: 0,
+      lockedBookingPlatformFeeInr: platformFeeInr,
+      futureBookingSurchargePercent,
+      futureBookingSurchargeAmount,
+      futureBookingPriceLabel: bookingMode === "future" ? "Future booking price" : "",
+      priceLockedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(!paymentDoc ? {
+        paymentStatus: "advance_paid_placeholder",
+        createdAt: FieldValue.serverTimestamp(),
+      } : {}),
+    }, { merge: true });
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: userId,
+      actorRole: "consumer",
+      action: "booking_modified",
+      entityType: "booking",
+      entityId: bookingId,
+      metadata: {
+        previousBedId,
+        nextBedId: chosenBed.bedId,
+        previousCheckInAt: String(bookingData.checkInAt ?? ""),
+        nextCheckInAt,
+        bookingMode,
+        duration,
+        totalAmount,
+        demandActiveAtBooking: Boolean(demandSummary.active),
+        demandWarningAtBooking: Boolean(demandSummary.warningActive),
+        demandMultiplierPercent,
+        futureBookingSurchargePercent,
+        attemptCount: rate.count,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  return {
+    ok: true,
+    bookingId,
+    bookingCode: String(bookingData.bookingCode ?? bookingId),
+    allocatedBedId: chosenBed.bedId,
+    allocatedBedCode: chosenBed.bedCode,
+    allocatedBedType: chosenBed.bedType,
+    checkInAt: nextCheckInAt,
+    bookingMode,
+    bedAmount,
+    platformFeeAmount: platformFeeInr,
+    totalAmount,
+    remainingPaid,
+  };
+});
+
+function distanceKmForIssue(a, b) {
+  const lat1 = Number(a?.lat);
+  const lng1 = Number(a?.lng);
+  const lat2 = Number(b?.lat);
+  const lng2 = Number(b?.lng);
+  if (![lat1, lng1, lat2, lng2].every(Number.isFinite)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const toRad = (value) => value * Math.PI / 180;
+  const earthKm = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const sinLat = Math.sin(dLat / 2);
+  const sinLng = Math.sin(dLng / 2);
+  const h = sinLat * sinLat
+    + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * sinLng * sinLng;
+  return earthKm * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+function sanitizeIssueReason(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  const allowed = new Set(["unclean", "damaged", "occupied", "unsafe", "wrong_bed", "other"]);
+  return allowed.has(normalized) ? normalized : "other";
+}
+
+function isCandidateBedAvailableForIssue({ bedId, bookingId, nowMs, blocks, availability }) {
+  const hasBlock = blocks
+    .filter((block) => block.bedId === bedId)
+    .some((block) => isBlockActiveForTime(block, nowMs, Number.POSITIVE_INFINITY));
+  if (hasBlock) {
+    return false;
+  }
+
+  return !availability
+    .filter((item) => item.id !== bookingId)
+    .filter((item) => item.bedId === bedId)
+    .filter((item) => item.bookingStatus === "confirmed" || item.bookingStatus === "checked_in")
+    .some((item) => {
+      const bookingStart = toMillisOrNull(item.checkInAt);
+      if (bookingStart === null) {
+        return false;
+      }
+      return hasOverlap(nowMs, Number.POSITIVE_INFINITY, bookingStart, bookingAvailabilityEndMillis(item));
+    });
+}
+
+exports.reportBedIssue = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const userId = request.auth.uid;
+  const input = request.data || {};
+  const bookingId = String(input.bookingId ?? "").trim();
+  const reason = sanitizeIssueReason(input.reason);
+  const notes = String(input.notes ?? "").trim().slice(0, 500);
+
+  if (!bookingId) {
+    throw new HttpsError("invalid-argument", "bookingId is required.");
+  }
+
+  const bookingRef = db.collection("bookings").doc(bookingId);
+  const bookingSnap = await bookingRef.get();
+  if (!bookingSnap.exists) {
+    throw new HttpsError("not-found", "Booking not found.");
+  }
+  const bookingData = bookingSnap.data() || {};
+  if (String(bookingData.userId ?? "") !== userId) {
+    throw new HttpsError("permission-denied", "You can report only your own booking.");
+  }
+  if (String(bookingData.bookingStatus ?? "").toLowerCase() !== "checked_in" || bookingData.checkOutAt) {
+    throw new HttpsError("failed-precondition", "Bed issues can be reported only after check-in and before checkout.");
+  }
+
+  const propertyId = String(bookingData.propertyId ?? "").trim();
+  const currentBedId = String(bookingData.bedId ?? "").trim();
+  if (!propertyId || !currentBedId) {
+    throw new HttpsError("failed-precondition", "Booking is missing property or bed details.");
+  }
+
+  const propertySnap = await db.collection("properties").doc(propertyId).get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const propertyData = propertySnap.data() || {};
+  const cityId = String(propertyData.cityId ?? "").trim();
+  const ownerId = String(propertyData.ownerId ?? "").trim();
+
+  const [samePropertyBedsSnap, cityPropertiesSnap, blocksSnap, availabilitySnap, currentBedSnap] = await Promise.all([
+    db.collection("beds").where("propertyId", "==", propertyId).where("active", "==", true).get(),
+    cityId
+      ? db.collection("properties").where("cityId", "==", cityId).where("status", "==", "active").get()
+      : Promise.resolve({ docs: [] }),
+    db.collection("bed_blocks").where("active", "==", true).get(),
+    db.collection("booking_availability").where("bookingStatus", "in", ["confirmed", "checked_in"]).get(),
+    db.collection("beds").doc(currentBedId).get(),
+  ]);
+
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const blocks = blocksSnap.docs.map((item) => ({
+    bedId: String(item.data().bedId ?? ""),
+    propertyId: String(item.data().propertyId ?? ""),
+    blockStart: String(item.data().blockStart ?? ""),
+    blockEnd: typeof item.data().blockEnd === "string" ? item.data().blockEnd : null,
+    isFullBlock: Boolean(item.data().isFullBlock),
+    active: item.data().active !== false,
+  }));
+  const availability = availabilitySnap.docs.map((item) => ({
+    id: item.id,
+    propertyId: String(item.data().propertyId ?? ""),
+    bedId: String(item.data().bedId ?? ""),
+    checkInAt: String(item.data().checkInAt ?? ""),
+    checkOutAt: String(item.data().checkOutAt ?? ""),
+    holdEndAt: String(item.data().holdEndAt ?? ""),
+    bookingStatus: String(item.data().bookingStatus ?? ""),
+  }));
+
+  const propertyMap = new Map();
+  cityPropertiesSnap.docs.forEach((item) => {
+    const data = item.data() || {};
+    propertyMap.set(item.id, {
+      propertyId: item.id,
+      name: String(data.name ?? ""),
+      ownerId: String(data.ownerId ?? ""),
+      cityId: String(data.cityId ?? ""),
+      lat: Number(data.lat),
+      lng: Number(data.lng),
+      sameProperty: item.id === propertyId,
+    });
+  });
+  if (!propertyMap.has(propertyId)) {
+    propertyMap.set(propertyId, {
+      propertyId,
+      name: String(propertyData.name ?? ""),
+      ownerId,
+      cityId,
+      lat: Number(propertyData.lat),
+      lng: Number(propertyData.lng),
+      sameProperty: true,
+    });
+  }
+
+  const samePropertyBeds = samePropertyBedsSnap.docs.map((item) => {
+    const data = item.data() || {};
+    return {
+      bedId: item.id,
+      propertyId: String(data.propertyId ?? ""),
+      roomId: String(data.roomId ?? ""),
+      bedCode: String(data.bedCode ?? ""),
+      bedType: String(data.bedType ?? "NON_AC"),
+    };
+  });
+
+  const samePropertyCandidates = samePropertyBeds
+    .filter((bed) => bed.bedId !== currentBedId)
+    .filter((bed) => isCandidateBedAvailableForIssue({
+      bedId: bed.bedId,
+      bookingId,
+      nowMs,
+      blocks,
+      availability,
+    }))
+    .map((bed) => ({
+      ...bed,
+      propertyName: propertyMap.get(bed.propertyId)?.name ?? "",
+      replacementType: "same_property",
+      distanceKm: 0,
+    }));
+
+  let nearbyCandidates = [];
+  if (samePropertyCandidates.length === 0 && cityId) {
+    const nearbyPropertyIds = [...propertyMap.keys()].filter((id) => id !== propertyId);
+    const nearbyBedsBatches = await Promise.all(nearbyPropertyIds.map(async (id) => {
+      const snap = await db.collection("beds").where("propertyId", "==", id).where("active", "==", true).get();
+      return snap.docs.map((item) => {
+        const data = item.data() || {};
+        const property = propertyMap.get(id) || {};
+        return {
+          bedId: item.id,
+          propertyId: id,
+          propertyName: String(property.name ?? ""),
+          roomId: String(data.roomId ?? ""),
+          bedCode: String(data.bedCode ?? ""),
+          bedType: String(data.bedType ?? "NON_AC"),
+          replacementType: "nearby_property",
+          distanceKm: distanceKmForIssue(propertyData, property),
+        };
+      });
+    }));
+    nearbyCandidates = nearbyBedsBatches
+      .flat()
+      .filter((bed) => isCandidateBedAvailableForIssue({
+        bedId: bed.bedId,
+        bookingId,
+        nowMs,
+        blocks,
+        availability,
+      }))
+      .sort((a, b) => {
+        if (a.distanceKm !== b.distanceKm) return a.distanceKm - b.distanceKm;
+        return a.bedCode.localeCompare(b.bedCode);
+      });
+  }
+
+  const replacement = samePropertyCandidates[0] || nearbyCandidates[0] || null;
+  const replacementRoomSnap = replacement?.roomId
+    ? await db.collection("rooms").doc(replacement.roomId).get()
+    : null;
+  const replacementRoomName = replacementRoomSnap?.exists
+    ? String(replacementRoomSnap.data()?.roomName ?? "")
+    : "";
+  const reportRef = db.collection(BED_ISSUE_REPORTS_COLLECTION).doc();
+  const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingId);
+  const currentBedRef = db.collection("beds").doc(currentBedId);
+  const currentBedData = currentBedSnap.exists ? (currentBedSnap.data() || {}) : {};
+  const repeatedIssueCount = Number(currentBedData.issueReportCount ?? 0) + 1;
+  const needsReview = repeatedIssueCount >= BED_ISSUE_REVIEW_THRESHOLD || !replacement;
+  const nextIssueStatus = replacement ? "reassigned" : "reported_no_replacement";
+
+  await db.runTransaction(async (transaction) => {
+    const freshBookingSnap = await transaction.get(bookingRef);
+    if (!freshBookingSnap.exists) {
+      throw new HttpsError("not-found", "Booking not found.");
+    }
+    const freshBooking = freshBookingSnap.data() || {};
+    if (String(freshBooking.userId ?? "") !== userId) {
+      throw new HttpsError("permission-denied", "You can report only your own booking.");
+    }
+    if (String(freshBooking.bookingStatus ?? "").toLowerCase() !== "checked_in" || freshBooking.checkOutAt) {
+      throw new HttpsError("failed-precondition", "This booking is no longer checked in.");
+    }
+
+    transaction.set(reportRef, {
+      userId,
+      bookingId,
+      bookingCode: String(bookingData.bookingCode ?? bookingId),
+      cityId,
+      propertyId,
+      ownerId,
+      originalBedId: currentBedId,
+      originalRoomId: String(bookingData.roomId ?? ""),
+      reason,
+      notes,
+      status: nextIssueStatus,
+      replacementType: replacement?.replacementType ?? "none",
+      replacementPropertyId: replacement?.propertyId ?? "",
+      replacementPropertyName: replacement?.propertyName ?? "",
+      replacementRoomId: replacement?.roomId ?? "",
+      replacementRoomName,
+      replacementBedId: replacement?.bedId ?? "",
+      replacementBedCode: replacement?.bedCode ?? "",
+      repeatedIssueCount,
+      needsReview,
+      createdAtMs: nowMs,
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+
+    transaction.set(currentBedRef, {
+      issueReportCount: FieldValue.increment(1),
+      issueNeedsReview: needsReview,
+      lastIssueReason: reason,
+      lastIssueBookingId: bookingId,
+      lastIssueReportId: reportRef.id,
+      lastIssueAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    if (replacement) {
+      transaction.set(bookingRef, {
+        propertyId: replacement.propertyId,
+        roomId: replacement.roomId,
+        bedId: replacement.bedId,
+        bedIssueStatus: nextIssueStatus,
+        bedIssueLastReportId: reportRef.id,
+        bedIssueReportedAt: FieldValue.serverTimestamp(),
+        previousBedIds: FieldValue.arrayUnion(currentBedId),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      transaction.set(bookingAvailabilityRef, {
+        propertyId: replacement.propertyId,
+        bedId: replacement.bedId,
+        checkInAt: String(bookingData.checkInAt ?? nowIso),
+        checkOutAt: null,
+        bookingStatus: "checked_in",
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    } else {
+      transaction.set(bookingRef, {
+        bedIssueStatus: nextIssueStatus,
+        bedIssueLastReportId: reportRef.id,
+        bedIssueReportedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+
+    if (ownerId) {
+      transaction.set(db.collection("owner_notices").doc(), {
+        ownerId,
+        type: needsReview ? "bed_issue_review_required" : "bed_issue_reported",
+        title: needsReview ? "Bed needs review" : "Bed issue reported",
+        message: needsReview
+          ? `Bed ${String(currentBedData.bedCode ?? currentBedId)} has ${repeatedIssueCount} issue report(s). Please inspect or replace it.`
+          : `A consumer reported bed ${String(currentBedData.bedCode ?? currentBedId)}. ${replacement ? `They were moved to ${replacement.bedCode}.` : "No replacement bed was available."}`,
+        bookingId,
+        reportId: reportRef.id,
+        propertyId,
+        bedId: currentBedId,
+        repeatedIssueCount,
+        dismissed: false,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    if (needsReview) {
+      transaction.set(db.collection("operator_notices").doc(), {
+        type: replacement ? "repeated_bed_issue" : "bed_issue_no_replacement",
+        title: replacement ? "Repeated bed issue" : "No replacement bed available",
+        message: replacement
+          ? `Bed ${String(currentBedData.bedCode ?? currentBedId)} has ${repeatedIssueCount} issue report(s). Operator review is recommended.`
+          : `Consumer reported a bed issue for booking ${String(bookingData.bookingCode ?? bookingId)}, but no replacement bed was available.`,
+        ownerId,
+        bookingId,
+        reportId: reportRef.id,
+        propertyId,
+        bedId: currentBedId,
+        dismissed: false,
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+
+    transaction.set(db.collection("audit_logs").doc(), {
+      actorUserId: userId,
+      actorRole: "consumer",
+      action: "bed_issue_reported",
+      entityType: "booking",
+      entityId: bookingId,
+      metadata: {
+        reportId: reportRef.id,
+        reason,
+        originalBedId: currentBedId,
+        replacementType: replacement?.replacementType ?? "none",
+        replacementPropertyId: replacement?.propertyId ?? "",
+        replacementBedId: replacement?.bedId ?? "",
+        repeatedIssueCount,
+        needsReview,
+      },
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  });
+
+  const message = replacement
+    ? replacement.replacementType === "same_property"
+      ? `Issue recorded. We moved you to bed ${replacement.bedCode || replacement.bedId} in the same property.`
+      : `Issue recorded. We moved you to bed ${replacement.bedCode || replacement.bedId} at ${replacement.propertyName || "a nearby property"}.`
+    : "Issue recorded. No alternate bed is currently available, so owner/operator support has been notified.";
+
+  return {
+    ok: true,
+    bookingId,
+    bookingCode: String(bookingData.bookingCode ?? bookingId),
+    reportId: reportRef.id,
+    status: nextIssueStatus,
+    message,
+    replacementType: replacement?.replacementType ?? "none",
+    replacementPropertyId: replacement?.propertyId ?? "",
+    replacementPropertyName: replacement?.propertyName ?? "",
+    replacementRoomId: replacement?.roomId ?? "",
+    replacementRoomName,
+    replacementBedId: replacement?.bedId ?? "",
+    replacementBedCode: replacement?.bedCode ?? "",
+    repeatedIssueCount,
   };
 });
 

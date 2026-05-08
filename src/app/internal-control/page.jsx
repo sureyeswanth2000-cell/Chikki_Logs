@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ProtectedRoute } from "@/components/auth/protected-route";
 import { DemandPricingPanel } from "@/components/admin/demand-pricing-panel";
 import { useAuth } from "@/context/auth-context";
+import { SUPERADMIN_SNAPSHOT } from "@/generated/superadmins-snapshot";
 import {
   addCity,
   approveOwnerApplication,
@@ -30,8 +31,18 @@ const superadminRoleOptions = [
   { value: "consumer", label: "Consumer" },
   { value: "owner", label: "Owner" },
   { value: "operator", label: "Operator" },
-  { value: "superadmin", label: "Superadmin" },
 ];
+
+function formatDateTime(value) {
+  if (!value) return "—";
+  try {
+    const date = typeof value?.toDate === "function" ? value.toDate() : new Date(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return date.toLocaleString();
+  } catch {
+    return "—";
+  }
+}
 
 function MetricCard({ label, value }) {
   return (
@@ -136,11 +147,13 @@ export default function InternalControlPage() {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState(null);
   const [searchNotice, setSearchNotice] = useState(null);
+  const [operatorPromotionPhrase, setOperatorPromotionPhrase] = useState("");
   const [applications, setApplications] = useState([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsNotice, setAppsNotice] = useState(null);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
   const [platformFeeInr, setPlatformFeeInr] = useState(9);
+  const [futureBookingSurchargePercent, setFutureBookingSurchargePercent] = useState(10);
   const [platformCommissionPercent, setPlatformCommissionPercent] = useState(5);
   const [commissionSaving, setCommissionSaving] = useState(false);
   const [commissionNotice, setCommissionNotice] = useState(null);
@@ -165,6 +178,10 @@ export default function InternalControlPage() {
   const [blockError, setBlockError] = useState(null);
   const [roleChanges, setRoleChanges] = useState([]);
   const [roleChangesLoading, setRoleChangesLoading] = useState(false);
+  const [superadmins, setSuperadmins] = useState([]);
+  const [superadminsLoading, setSuperadminsLoading] = useState(false);
+  const [superadminsError, setSuperadminsError] = useState(null);
+  const [superadminsNotice, setSuperadminsNotice] = useState(null);
   const [identityForm, setIdentityForm] = useState({
     aadhaarRefId: "",
     targetUserId: "",
@@ -218,6 +235,7 @@ export default function InternalControlPage() {
       const settings = await getPlatformSettings();
       setCheckInGraceMinutes(Number(settings?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(settings?.platformFeeInr ?? 9));
+      setFutureBookingSurchargePercent(Number(settings?.futureBookingSurchargePercent ?? 10));
       setPlatformCommissionPercent(Number(settings?.platformCommissionPercent ?? 5));
       setGlobalScarcityDisabled(Boolean(settings?.globalScarcityDisabled ?? false));
     } catch (error) {
@@ -273,6 +291,24 @@ export default function InternalControlPage() {
     }
   }, []);
 
+  const loadSuperadmins = useCallback(async () => {
+    setSuperadminsLoading(true);
+    setSuperadminsError(null);
+    setSuperadminsNotice(null);
+    try {
+      const snapshot = Array.isArray(SUPERADMIN_SNAPSHOT) ? SUPERADMIN_SNAPSHOT : [];
+      setSuperadmins(snapshot);
+      if (snapshot.some((item) => String(item?.source ?? "") === "local-placeholder")) {
+        setSuperadminsNotice("Superadmin history is shown from the generated local snapshot. Run the backend superadmin script to refresh it before a production build.");
+      }
+    } catch (error) {
+      setSuperadmins([]);
+      setSuperadminsError(error instanceof Error ? error.message : "Could not load superadmin history.");
+    } finally {
+      setSuperadminsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void loadMetrics();
     void loadCities();
@@ -282,7 +318,8 @@ export default function InternalControlPage() {
     void loadDailyOverview();
     void loadBlockOwners();
     void loadRoleChanges();
-  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings, loadDailyOverview, loadBlockOwners, loadRoleChanges]);
+    void loadSuperadmins();
+  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings, loadDailyOverview, loadBlockOwners, loadRoleChanges, loadSuperadmins]);
 
   useEffect(() => {
     if (!identityResult || identityCountdown <= 0) return undefined;
@@ -297,6 +334,12 @@ export default function InternalControlPage() {
       setIdentityResult(null);
     }
   }, [identityCountdown, identityResult]);
+
+  useEffect(() => {
+    if (selectedRole !== "operator") {
+      setOperatorPromotionPhrase("");
+    }
+  }, [selectedRole]);
 
   function startAddCity() {
     setEditingCity(null);
@@ -410,10 +453,12 @@ export default function InternalControlPage() {
       const next = await updatePlatformSettings({
         checkInGraceMinutes,
         platformFeeInr,
+        futureBookingSurchargePercent,
         globalScarcityDisabled,
       });
       setCheckInGraceMinutes(Number(next?.checkInGraceMinutes ?? 15));
       setPlatformFeeInr(Number(next?.platformFeeInr ?? 9));
+      setFutureBookingSurchargePercent(Number(next?.futureBookingSurchargePercent ?? 10));
       setPlatformCommissionPercent(Number(next?.platformCommissionPercent ?? platformCommissionPercent));
       setGlobalScarcityDisabled(Boolean(next?.globalScarcityDisabled ?? false));
       setSettingsNotice("Platform timeout updated successfully.");
@@ -459,8 +504,9 @@ export default function InternalControlPage() {
         return;
       }
       setSearchResult(found);
-      setSelectedRole(found.role);
+      setSelectedRole(found.role === "superadmin" ? "consumer" : found.role);
       setOwnerRevenueSharePercent(Number(found.ownerRevenueSharePercent ?? 10));
+      setOperatorPromotionPhrase("");
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Search failed.");
     } finally {
@@ -473,13 +519,18 @@ export default function InternalControlPage() {
     setSearchError(null);
     setSearchNotice(null);
 
-    // Extra confirmation when granting elevated access
-    if (selectedRole === "operator" || selectedRole === "superadmin") {
+    if (selectedRole === "operator") {
+      const expectedPhrase = "PROMOTE OPERATOR";
+      if (operatorPromotionPhrase.trim().toUpperCase() !== expectedPhrase) {
+        setSearchError(`Type ${expectedPhrase} to confirm this operator promotion.`);
+        return;
+      }
+    }
+
+    // Extra confirmation when granting the most elevated access.
+    if (selectedRole === "superadmin") {
       const displayName = searchResult.name || searchResult.phoneNumber || "this user";
-      const accessDescription =
-        selectedRole === "operator"
-          ? "Operators can manage all bookings, override owner blocks, settle commissions, and see platform financials across every city."
-          : "Superadmins have unrestricted platform access including identity break-glass, role changes, and billing controls.";
+      const accessDescription = "Superadmins have unrestricted platform access including identity break-glass, role changes, and billing controls.";
       const confirmed = window.confirm(
         `Promote "${displayName}" to ${selectedRole.toUpperCase()}?\n\n${accessDescription}\n\nThis grants significant platform access. Proceed only if you are certain.`
       );
@@ -642,6 +693,7 @@ export default function InternalControlPage() {
             { id: "settings", label: "Platform Settings" },
             { id: "demand", label: "Demand Pricing" },
             { id: "roles", label: "Role Control" },
+            { id: "superadmins", label: "Superadmins" },
             { id: "identity", label: "Identity Access" },
             { id: "cities", label: "Cities" },
             { id: "applications", label: "Applications" },
@@ -669,7 +721,9 @@ export default function InternalControlPage() {
             ) : metrics ? (
               <div className="mt-4 grid gap-4 md:grid-cols-3 xl:grid-cols-6">
                 <MetricCard label="Bookings Today" value={metrics.bookingsToday} />
+                <MetricCard label="Future Today" value={metrics.futureBookingsToday ?? 0} />
                 <MetricCard label="Gross Today" value={`INR ${metrics.grossCollectionToday}`} />
+                <MetricCard label="Future Gross" value={`INR ${metrics.futureBookingGrossToday ?? 0}`} />
                 <MetricCard label="Commission" value={`INR ${metrics.commissionToday}`} />
                 <MetricCard label="Active Properties" value={metrics.activeProperties} />
                 <MetricCard label="Active Owners" value={metrics.activeOwners} />
@@ -812,6 +866,19 @@ export default function InternalControlPage() {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Future Booking Surcharge % (0-100)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={futureBookingSurchargePercent}
+                  onChange={(event) => setFutureBookingSurchargePercent(Number(event.target.value || 0))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                   Platform Fee (INR per booking)
                 </label>
                 <input
@@ -889,6 +956,7 @@ export default function InternalControlPage() {
                       const result = await updatePlatformSettings({
                         checkInGraceMinutes,
                         platformFeeInr,
+                        futureBookingSurchargePercent,
                         globalScarcityDisabled: next,
                       });
                       setGlobalScarcityDisabled(Boolean(result?.globalScarcityDisabled ?? next));
@@ -931,7 +999,7 @@ export default function InternalControlPage() {
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
             <h2 className="text-lg font-bold text-slate-800">Role Control</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Superadmin can create operator and superadmin roles, but existing superadmin accounts remain locked from UI changes.
+              Superadmin can manage normal user roles from the UI, but superadmin accounts themselves stay view-only and are managed through backend scripts.
             </p>
 
             {searchError ? (
@@ -966,42 +1034,77 @@ export default function InternalControlPage() {
               <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="font-semibold text-slate-800">{searchResult.name || "(No name)"}</p>
                 <p className="text-sm text-slate-600">{searchResult.phoneNumber}</p>
-                <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Current Role
-                    </label>
-                    <p className="rounded-lg bg-white px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
-                      {searchResult.role}
-                    </p>
+                <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current Role</p>
+                      <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                        {searchResult.role}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Account Status</p>
+                      <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                        {searchResult.accountStatus || "active"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Owner Share</p>
+                      <p className="mt-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-slate-200">
+                        {searchResult.ownerRevenueSharePercent ?? 10}%
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Change To
-                    </label>
-                    <select
-                      value={selectedRole}
-                      onChange={(event) => setSelectedRole(event.target.value)}
-                      className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
-                      disabled={searchResult.role === "superadmin"}
-                    >
-                      {superadminRoleOptions.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleSaveRole()}
-                    disabled={searchResult.role === "superadmin"}
-                    className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  >
-                    Save Role
-                  </button>
                 </div>
-                {selectedRole === "owner" ? (
+                {searchResult.role !== "superadmin" ? (
+                  <>
+                    <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Change To
+                        </label>
+                        <select
+                          value={selectedRole}
+                          onChange={(event) => setSelectedRole(event.target.value)}
+                          className="rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                        >
+                          {superadminRoleOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={selectedRole === "operator" && operatorPromotionPhrase.trim().toUpperCase() !== "PROMOTE OPERATOR"}
+                        onClick={() => void handleSaveRole()}
+                        className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                      >
+                        Save Role
+                      </button>
+                    </div>
+                    {selectedRole === "operator" ? (
+                      <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                        <p className="text-sm font-semibold text-amber-800">Operator promotion requires an explicit acknowledgement.</p>
+                        <p className="mt-1 text-sm text-amber-700">
+                          Operators can manage bookings, override owner blocks, settle commissions, and see financial snapshots across the platform. Type <span className="font-mono font-bold">PROMOTE OPERATOR</span> to enable this action.
+                        </p>
+                        <input
+                          value={operatorPromotionPhrase}
+                          onChange={(event) => setOperatorPromotionPhrase(event.target.value)}
+                          placeholder="PROMOTE OPERATOR"
+                          className="mt-3 w-full max-w-md rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm outline-none focus:border-amber-500"
+                        />
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mt-4 text-sm text-amber-700">
+                    Superadmin accounts are view-only in the UI. Create, disable, and delete operations happen through backend scripts only.
+                  </p>
+                )}
+                {selectedRole === "owner" && searchResult.role !== "superadmin" ? (
                   <div className="mt-3 max-w-xs">
                     <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
                       Owner Revenue Share %
@@ -1013,14 +1116,8 @@ export default function InternalControlPage() {
                       value={ownerRevenueSharePercent}
                       onChange={(event) => setOwnerRevenueSharePercent(Number(event.target.value || 0))}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
-                      disabled={searchResult.role === "superadmin"}
                     />
                   </div>
-                ) : null}
-                {searchResult.role === "superadmin" ? (
-                  <p className="mt-3 text-sm text-amber-700">
-                    Existing superadmin accounts are locked from UI changes and must be edited only from the database side.
-                  </p>
                 ) : null}
                 {searchResult.aadhaarRefId ? (
                   <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
@@ -1041,6 +1138,79 @@ export default function InternalControlPage() {
                 ) : null}
               </div>
             ) : null}
+          </section>
+        ) : null}
+
+        {activeTab === "superadmins" ? (
+          <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Superadmin History</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Active and inactive superadmin accounts are shown here only. Creation, disable, and delete are backend-script actions.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadSuperadmins()}
+                className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Refresh
+              </button>
+            </div>
+
+            {superadminsError ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {superadminsError}
+              </div>
+            ) : null}
+
+            {superadminsNotice ? (
+              <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                {superadminsNotice}
+              </div>
+            ) : null}
+
+            {superadminsLoading ? (
+              <p className="mt-4 text-sm text-slate-500">Loading superadmins...</p>
+            ) : superadmins.length === 0 ? (
+              <p className="mt-4 text-sm italic text-slate-400">No superadmins found.</p>
+            ) : (
+              <div className="mt-4 overflow-x-auto rounded-xl ring-1 ring-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3 text-left">Name</th>
+                      <th className="px-4 py-3 text-left">Phone</th>
+                      <th className="px-4 py-3 text-left">Email</th>
+                      <th className="px-4 py-3 text-left">Status</th>
+                      <th className="px-4 py-3 text-left">Created</th>
+                      <th className="px-4 py-3 text-left">Updated</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 bg-white">
+                    {superadmins.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 font-medium text-slate-800">{item.name || item.id}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.phoneNumber || "—"}</td>
+                        <td className="px-4 py-3 text-slate-600">{item.email || "—"}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-xs font-semibold ${
+                            String(item.accountStatus).toLowerCase() === "active"
+                              ? "bg-emerald-100 text-emerald-700"
+                              : "bg-slate-100 text-slate-600"
+                          }`}>
+                            {item.accountStatus || "active"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-500">{formatDateTime(item.createdAt)}</td>
+                        <td className="px-4 py-3 text-slate-500">{formatDateTime(item.updatedAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </section>
         ) : null}
 

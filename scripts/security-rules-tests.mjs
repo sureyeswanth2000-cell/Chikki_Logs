@@ -7,10 +7,14 @@ import {
   assertSucceeds,
 } from "@firebase/rules-unit-testing";
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
+  query,
   setDoc,
   updateDoc,
+  where,
 } from "firebase/firestore";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,8 +57,58 @@ async function main() {
         checkInGraceMinutes: 30,
       });
 
-      await setDoc(doc(db, "properties", "propA"), { ownerId: "ownerA" });
-      await setDoc(doc(db, "properties", "propB"), { ownerId: "ownerB" });
+      await setDoc(doc(db, "cities", "_platform_cfg"), {
+        _type: "platform_settings",
+        platformFeeInr: 9,
+        platformCommissionPercent: 5,
+      });
+
+      await setDoc(doc(db, "cities", "cityA"), {
+        name: "City A",
+        active: true,
+      });
+
+      await setDoc(doc(db, "properties", "propA"), {
+        ownerId: "ownerA",
+        cityId: "cityA",
+        status: "active",
+        publicOwnerRevenueSharePercent: 5,
+      });
+      await setDoc(doc(db, "properties", "propB"), {
+        ownerId: "ownerB",
+        cityId: "cityA",
+        status: "active",
+      });
+
+      await setDoc(doc(db, "rooms", "roomA"), {
+        ownerId: "ownerA",
+        propertyId: "propA",
+        roomName: "101",
+      });
+
+      await setDoc(doc(db, "beds", "bedA"), {
+        ownerId: "ownerA",
+        propertyId: "propA",
+        roomId: "roomA",
+        bedCode: "A1",
+        active: true,
+      });
+
+      await setDoc(doc(db, "bed_blocks", "blockA"), {
+        ownerId: "ownerA",
+        propertyId: "propA",
+        bedId: "bedA",
+        active: true,
+      });
+
+      await setDoc(doc(db, "bed_issue_reports", "reportA"), {
+        userId: "consumerA",
+        ownerId: "ownerA",
+        propertyId: "propA",
+        bookingId: "bookingA",
+        originalBedId: "bedA",
+        status: "reported_no_replacement",
+      });
 
       await setDoc(doc(db, "bookings", "bookingA"), {
         userId: "consumerA",
@@ -88,6 +142,7 @@ async function main() {
 
       await setDoc(doc(db, "payments", "paymentA"), {
         bookingId: "bookingA",
+        propertyId: "propA",
         basePrice: 100,
         commissionAmount: 10,
         gatewayAmount: 2,
@@ -95,6 +150,26 @@ async function main() {
         advancePaid: 100,
         remainingPaid: 12,
         paymentStatus: "pending_settlement",
+      });
+
+      await setDoc(doc(db, "owner_commission_dues", "dueA"), {
+        ownerId: "ownerA",
+        bookingId: "bookingA",
+        status: "pending",
+      });
+
+      await setDoc(doc(db, "owner_notices", "ownerNoticeA"), {
+        ownerId: "ownerA",
+        dismissed: false,
+      });
+
+      await setDoc(doc(db, "operator_notices", "operatorNoticeA"), {
+        dismissed: false,
+      });
+
+      await setDoc(doc(db, "owner_applications", "applicationA"), {
+        userId: "consumerA",
+        status: "pending",
       });
 
       await setDoc(doc(db, "demand_watchlist", "property_propA"), {
@@ -123,6 +198,7 @@ async function main() {
     const ownerA = testEnv.authenticatedContext("ownerA").firestore();
     const superA = testEnv.authenticatedContext("superA").firestore();
     const operatorA = testEnv.authenticatedContext("operatorA").firestore();
+    const guest = testEnv.unauthenticatedContext().firestore();
 
     const tests = [
       {
@@ -185,6 +261,12 @@ async function main() {
         },
       },
       {
+        name: "signed-in user can read city demand pricing summary",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(consumerA, "demand_pricing", "city_cityA")));
+        },
+      },
+      {
         name: "owner can read own property demand override",
         run: async () => {
           await assertSucceeds(getDoc(doc(ownerA, "demand_overrides", "property_propA")));
@@ -198,6 +280,223 @@ async function main() {
               disabledBy: "owner",
               reason: "manual",
             }),
+          );
+        },
+      },
+      {
+        name: "consumer can read own bed issue report",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(consumerA, "bed_issue_reports", "reportA")));
+        },
+      },
+      {
+        name: "owner can read own property bed issue report",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(ownerA, "bed_issue_reports", "reportA")));
+        },
+      },
+      {
+        name: "consumer cannot write bed issue reports directly",
+        run: async () => {
+          await assertFails(
+            setDoc(doc(consumerA, "bed_issue_reports", "reportClientWrite"), {
+              userId: "consumerA",
+              propertyId: "propA",
+            }),
+          );
+        },
+      },
+
+      // --- page-level query shape tests ---
+      {
+        name: "guest listing can query active properties by city before login",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(
+              collection(guest, "properties"),
+              where("cityId", "==", "cityA"),
+              where("status", "==", "active"),
+            )),
+          );
+        },
+      },
+      {
+        name: "guest listing can query rooms by active property before login",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(guest, "rooms"), where("propertyId", "==", "propA"))),
+          );
+        },
+      },
+      {
+        name: "guest listing can query active beds by active property before login",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(guest, "beds"), where("propertyId", "==", "propA"), where("active", "==", true))),
+          );
+        },
+      },
+      {
+        name: "guest listing can query active bed blocks by active property before login",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(guest, "bed_blocks"), where("propertyId", "==", "propA"), where("active", "==", true))),
+          );
+        },
+      },
+      {
+        name: "guest listing can query booking availability by active property before login",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(guest, "booking_availability"), where("propertyId", "==", "propA"))),
+          );
+        },
+      },
+      {
+        name: "guest listing can read public demand pricing before login",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(guest, "demand_pricing", "property_propA")));
+        },
+      },
+      {
+        name: "guest listing must not read bookings before login",
+        run: async () => {
+          await assertFails(getDoc(doc(guest, "bookings", "bookingA")));
+        },
+      },
+      {
+        name: "guest listing must not read payments before login",
+        run: async () => {
+          await assertFails(getDoc(doc(guest, "payments", "paymentA")));
+        },
+      },
+      {
+        name: "guest listing must not read internal platform_settings before login",
+        run: async () => {
+          await assertFails(getDoc(doc(guest, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "guest listing must not read owner user doc before login",
+        run: async () => {
+          await assertFails(getDoc(doc(guest, "users", "ownerA")));
+        },
+      },
+      {
+        name: "consumer listing can query active properties by city",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(
+              collection(consumerA, "properties"),
+              where("cityId", "==", "cityA"),
+              where("status", "==", "active"),
+            )),
+          );
+        },
+      },
+      {
+        name: "consumer listing can query rooms by property",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(consumerA, "rooms"), where("propertyId", "==", "propA"))),
+          );
+        },
+      },
+      {
+        name: "consumer listing can query beds by property",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(consumerA, "beds"), where("propertyId", "==", "propA"), where("active", "==", true))),
+          );
+        },
+      },
+      {
+        name: "consumer listing can query bed blocks by property",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(consumerA, "bed_blocks"), where("propertyId", "==", "propA"), where("active", "==", true))),
+          );
+        },
+      },
+      {
+        name: "consumer listing can read public legacy platform config",
+        run: async () => {
+          await assertSucceeds(getDoc(doc(consumerA, "cities", "_platform_cfg")));
+        },
+      },
+      {
+        name: "consumer listing must not read internal platform_settings",
+        run: async () => {
+          await assertFails(getDoc(doc(consumerA, "platform_settings", "main")));
+        },
+      },
+      {
+        name: "consumer listing must not read owner user commission doc",
+        run: async () => {
+          await assertFails(getDoc(doc(consumerA, "users", "ownerA")));
+        },
+      },
+      {
+        name: "owner history can query own bookings by property",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(ownerA, "bookings"), where("propertyId", "in", ["propA"]))),
+          );
+        },
+      },
+      {
+        name: "owner earnings can query own payments by booking",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(ownerA, "payments"), where("bookingId", "in", ["bookingA"]))),
+          );
+        },
+      },
+      {
+        name: "owner dashboard can query own pending commission dues",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(
+              collection(ownerA, "owner_commission_dues"),
+              where("ownerId", "==", "ownerA"),
+              where("status", "in", ["pending", "claimed"]),
+            )),
+          );
+        },
+      },
+      {
+        name: "owner dashboard can query own undismissed notices",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(
+              collection(ownerA, "owner_notices"),
+              where("ownerId", "==", "ownerA"),
+              where("dismissed", "==", false),
+            )),
+          );
+        },
+      },
+      {
+        name: "operator console can query users by phone",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(operatorA, "users"), where("phoneNumber", "==", "+100"))),
+          );
+        },
+      },
+      {
+        name: "operator console can query pending owner applications",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(operatorA, "owner_applications"), where("status", "==", "pending"))),
+          );
+        },
+      },
+      {
+        name: "operator console can query undismissed operator notices",
+        run: async () => {
+          await assertSucceeds(
+            getDocs(query(collection(operatorA, "operator_notices"), where("dismissed", "==", false))),
           );
         },
       },

@@ -199,7 +199,7 @@ export default function RegisterPage() {
                 <div id="recaptcha-container" className="mt-6" />
 
                 <p className="mt-6 text-xs text-slate-500">
-                    First booking is easier: Aadhaar is not required for the first booking. It becomes mandatory starting with the second booking.
+                    First booking is easier: Aadhaar is optional, and you can add it later from your profile if you want it saved for repeat bookings.
                 </p>
 
                 <div className="mt-5 space-y-2">

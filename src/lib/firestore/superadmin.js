@@ -26,6 +26,7 @@ export const DEFAULT_DEMAND_SETTINGS = {
     { minOccupancyPercent: 80, multiplierPercent: 30 },
   ],
 };
+const DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT = 10;
 
 // Write an audit log directly (avoids undeployed callable)
 async function writeAuditLog(action, entityType, entityId, metadata) {
@@ -74,13 +75,20 @@ export async function getDashboardMetrics() {
   ]);
 
   let bookingsToday = 0;
+  let futureBookingsToday = 0;
   let grossCollectionToday = 0;
+  let futureBookingGrossToday = 0;
   let commissionToday = 0;
 
   bookingsSnapshot.docs.forEach((item) => {
     const data = item.data();
     const createdMillis = toMillis(data.createdAt);
-    if (createdMillis && createdMillis >= todayStart) bookingsToday += 1;
+    if (createdMillis && createdMillis >= todayStart) {
+      bookingsToday += 1;
+      if (String(data.bookingMode ?? "").toLowerCase() === "future") {
+        futureBookingsToday += 1;
+      }
+    }
   });
 
   let totalPayments = 0;
@@ -94,6 +102,9 @@ export async function getDashboardMetrics() {
 
     if (createdMillis && createdMillis >= todayStart) {
       grossCollectionToday += Number.isNaN(totalAmount) ? 0 : totalAmount;
+      if (String(data.bookingMode ?? "").toLowerCase() === "future") {
+        futureBookingGrossToday += Number.isNaN(totalAmount) ? 0 : totalAmount;
+      }
       commissionToday += Number.isNaN(commissionAmount) ? 0 : commissionAmount;
     }
     totalPayments += 1;
@@ -103,7 +114,9 @@ export async function getDashboardMetrics() {
   const paymentSuccessRate = totalPayments === 0 ? 0 : Math.round((successfulPayments / totalPayments) * 100);
   return {
     bookingsToday,
+    futureBookingsToday,
     grossCollectionToday,
+    futureBookingGrossToday,
     commissionToday,
     activeProperties: propertiesSnapshot.size,
     activeOwners: ownersSnapshot.size,
@@ -358,12 +371,44 @@ export async function searchUserByPhone(phone) {
     name: String(data.name ?? ""),
     phoneNumber: String(data.phoneNumber ?? ""),
     role: String(data.role ?? ""),
+    accountStatus: String(data.accountStatus ?? data.status ?? "active"),
     ownerRevenueSharePercent: Number(data.ownerRevenueSharePercent ?? 10),
     email: String(data.email ?? ""),
     aadhaarRefId: String(data.aadhaarRefId ?? ""),
     aadhaarLast4: String(data.aadhaarLast4 ?? ""),
     aadhaarStatus: String(data.aadhaarStatus ?? ""),
   };
+}
+
+export async function getSuperadminAccounts() {
+  const snapshot = await getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "superadmin")));
+  return snapshot.docs
+    .map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        name: String(data.name ?? ""),
+        phoneNumber: String(data.phoneNumber ?? ""),
+        email: String(data.email ?? ""),
+        role: String(data.role ?? "superadmin"),
+        accountStatus: String(data.accountStatus ?? data.status ?? "active"),
+        createdAt: data.createdAt ?? null,
+        updatedAt: data.updatedAt ?? null,
+      };
+    })
+    .sort((a, b) => {
+      const statusRank = (value) => {
+        const status = String(value ?? "").toLowerCase();
+        if (status === "active") return 0;
+        if (status === "inactive") return 1;
+        if (status === "disabled") return 2;
+        if (status === "deleted") return 3;
+        return 4;
+      };
+      return statusRank(a.accountStatus) - statusRank(b.accountStatus)
+        || String(b.updatedAt ?? b.createdAt ?? "").localeCompare(String(a.updatedAt ?? a.createdAt ?? ""))
+        || a.id.localeCompare(b.id);
+    });
 }
 
 export async function updateManagedUserRole(userId, role, ownerRevenueSharePercent) {
@@ -450,6 +495,7 @@ export async function getPlatformSettings() {
     checkInGraceMinutes: Number(main.checkInGraceMinutes ?? legacy.checkInGraceMinutes ?? 15),
     platformFeeInr: Math.max(0, Number(main.platformFeeInr ?? legacy.platformFeeInr ?? DEFAULT_PLATFORM_FEE_INR) || DEFAULT_PLATFORM_FEE_INR),
     platformCommissionPercent: Math.max(0, Math.min(100, Number(main.platformCommissionPercent ?? DEFAULT_PLATFORM_COMMISSION_PERCENT))),
+    futureBookingSurchargePercent: Math.max(0, Math.min(100, Number(main.futureBookingSurchargePercent ?? legacy.futureBookingSurchargePercent ?? DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT))),
     globalScarcityDisabled: Boolean(main.globalScarcityDisabled ?? false),
   };
 }
@@ -542,9 +588,10 @@ export async function dismissOperatorNotice(noticeId) {
   });
 }
 
-export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr, globalScarcityDisabled }) {
+export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeInr, futureBookingSurchargePercent, globalScarcityDisabled }) {
   const clamped = Math.min(120, Math.max(5, Number(checkInGraceMinutes) || 15));
   const nextPlatformFee = Math.min(999, Math.max(0, Number(platformFeeInr) || DEFAULT_PLATFORM_FEE_INR));
+  const nextFutureSurcharge = Math.min(100, Math.max(0, Number(futureBookingSurchargePercent) || 0));
   const scarcityKillSwitch = Boolean(globalScarcityDisabled);
   // Write to both canonical platform_settings/main AND legacy _platform_cfg for backward compat
   await Promise.all([
@@ -553,6 +600,7 @@ export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeI
       {
         checkInGraceMinutes: clamped,
         platformFeeInr: nextPlatformFee,
+        futureBookingSurchargePercent: nextFutureSurcharge,
         globalScarcityDisabled: scarcityKillSwitch,
         updatedAt: serverTimestamp(),
       },
@@ -564,6 +612,7 @@ export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeI
         _type: "platform_settings",
         checkInGraceMinutes: clamped,
         platformFeeInr: nextPlatformFee,
+        futureBookingSurchargePercent: nextFutureSurcharge,
         updatedAt: serverTimestamp(),
       },
       { merge: true }
@@ -572,9 +621,15 @@ export async function updatePlatformSettings({ checkInGraceMinutes, platformFeeI
   await writeAuditLog("platform_settings_updated", "platform_settings", "main", {
     checkInGraceMinutes: clamped,
     platformFeeInr: nextPlatformFee,
+    futureBookingSurchargePercent: nextFutureSurcharge,
     globalScarcityDisabled: scarcityKillSwitch,
   });
-  return { checkInGraceMinutes: clamped, platformFeeInr: nextPlatformFee, globalScarcityDisabled: scarcityKillSwitch };
+  return {
+    checkInGraceMinutes: clamped,
+    platformFeeInr: nextPlatformFee,
+    futureBookingSurchargePercent: nextFutureSurcharge,
+    globalScarcityDisabled: scarcityKillSwitch,
+  };
 }
 
 export async function getOwnersForCommissionManagement() {

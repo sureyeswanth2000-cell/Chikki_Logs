@@ -57,6 +57,7 @@ async function promoteSuperadmin() {
   await db.collection("users").doc(userRecord.uid).set(
     {
       role: "superadmin",
+      accountStatus: "active",
       phoneNumber: userRecord.phoneNumber ?? "",
       email: userRecord.email ?? "",
       updatedAt: FieldValue.serverTimestamp(),

@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useAuth } from "@/context/auth-context";
 import { getActiveCities } from "@/lib/firestore/consumer";
+import { formatDistance, getTransitDisplayItems } from "@/lib/geo";
 import {
     createBed,
     createBedBlock,
@@ -47,19 +48,42 @@ out body;
     const payload = await response.json();
     const elements = Array.isArray(payload?.elements) ? payload.elements : [];
 
-    const railwayDistances = elements
-        .filter((item) => item?.tags?.railway === "station")
-        .map((item) => haversineKm(lat, lng, Number(item.lat), Number(item.lon)))
-        .filter((value) => Number.isFinite(value));
+    const transitItems = elements
+        .map((item) => {
+            const itemLat = Number(item.lat);
+            const itemLng = Number(item.lon);
+            if (!Number.isFinite(itemLat) || !Number.isFinite(itemLng)) {
+                return null;
+            }
+            const type = item?.tags?.railway === "station"
+                ? "railway"
+                : item?.tags?.amenity === "bus_station"
+                ? "bus"
+                : "";
+            if (!type) {
+                return null;
+            }
+            return {
+                type,
+                name: String(item?.tags?.name ?? item?.tags?.["name:en"] ?? "").trim(),
+                distanceKm: haversineKm(lat, lng, itemLat, itemLng),
+            };
+        })
+        .filter((item) => item && Number.isFinite(item.distanceKm))
+        .sort((a, b) => a.distanceKm - b.distanceKm);
 
-    const busDistances = elements
-        .filter((item) => item?.tags?.amenity === "bus_station")
-        .map((item) => haversineKm(lat, lng, Number(item.lat), Number(item.lon)))
-        .filter((value) => Number.isFinite(value));
+    const nearestRailway = transitItems.find((item) => item.type === "railway") ?? null;
+    const nearestBus = transitItems.find((item) => item.type === "bus") ?? null;
+    const nearestTransit = transitItems[0] ?? null;
 
     return {
-        nearRailwayKm: railwayDistances.length ? Math.min(...railwayDistances).toFixed(2) : "",
-        nearBusKm: busDistances.length ? Math.min(...busDistances).toFixed(2) : "",
+        nearRailwayKm: nearestRailway ? nearestRailway.distanceKm.toFixed(2) : "",
+        nearBusKm: nearestBus ? nearestBus.distanceKm.toFixed(2) : "",
+        nearRailwayName: nearestRailway?.name ?? "",
+        nearBusName: nearestBus?.name ?? "",
+        nearestTransitType: nearestTransit?.type ?? "",
+        nearestTransitName: nearestTransit?.name ?? "",
+        nearestTransitKm: nearestTransit ? nearestTransit.distanceKm.toFixed(2) : "",
     };
 }
 
@@ -83,6 +107,11 @@ export default function OwnerBedsPage() {
         lng: "",
         nearRailwayKm: "",
         nearBusKm: "",
+        nearRailwayName: "",
+        nearBusName: "",
+        nearestTransitType: "",
+        nearestTransitName: "",
+        nearestTransitKm: "",
     });
     const [roomForm, setRoomForm] = useState({
         propertyId: "",
@@ -111,6 +140,8 @@ export default function OwnerBedsPage() {
     const roomsForBedProperty = useMemo(() => rooms.filter((r) => r.propertyId === bedForm.propertyId), [rooms, bedForm.propertyId]);
     const blockRooms = useMemo(() => rooms.filter((r) => r.propertyId === blockForm.propertyId), [rooms, blockForm.propertyId]);
     const blockBeds = useMemo(() => beds.filter((b) => b.roomId === blockForm.roomId), [beds, blockForm.roomId]);
+    const selectedCity = useMemo(() => cities.find((item) => item.id === propertyForm.cityId) ?? null, [cities, propertyForm.cityId]);
+    const transitDisplayItems = useMemo(() => getTransitDisplayItems(propertyForm), [propertyForm]);
 
     const loadData = useCallback(async () => {
         if (!user?.uid) return;
@@ -158,8 +189,13 @@ export default function OwnerBedsPage() {
                 ...prev,
                 nearRailwayKm: distances.nearRailwayKm,
                 nearBusKm: distances.nearBusKm,
+                nearRailwayName: distances.nearRailwayName,
+                nearBusName: distances.nearBusName,
+                nearestTransitType: distances.nearestTransitType,
+                nearestTransitName: distances.nearestTransitName,
+                nearestTransitKm: distances.nearestTransitKm,
             }));
-            setNotice("Nearby railway and bus stand distances calculated.");
+            setNotice("Nearby transit distances calculated.");
         } catch {
             setError("Could not auto-calculate nearby distances. You can still enter them manually.");
         } finally {
@@ -190,6 +226,36 @@ export default function OwnerBedsPage() {
         );
     }
 
+    function handleUseCityCenter() {
+        const lat = Number(selectedCity?.lat);
+        const lng = Number(selectedCity?.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+            setError("Select a city with saved coordinates first.");
+            return;
+        }
+        setPropertyForm((prev) => ({
+            ...prev,
+            lat: lat.toFixed(6),
+            lng: lng.toFixed(6),
+        }));
+        void refreshTransitDistances(lat, lng);
+    }
+
+    function handleResetLocation() {
+        setPropertyForm((prev) => ({
+            ...prev,
+            lat: "",
+            lng: "",
+            nearRailwayKm: "",
+            nearBusKm: "",
+            nearRailwayName: "",
+            nearBusName: "",
+            nearestTransitType: "",
+            nearestTransitName: "",
+            nearestTransitKm: "",
+        }));
+    }
+
     function handleMapPick(lat, lng) {
         setPropertyForm((prev) => ({
             ...prev,
@@ -206,6 +272,7 @@ export default function OwnerBedsPage() {
         const lng = Number(propertyForm.lng);
         const nearRailwayKm = Number(propertyForm.nearRailwayKm);
         const nearBusKm = Number(propertyForm.nearBusKm);
+        const nearestTransitKm = Number(propertyForm.nearestTransitKm);
         if (Number.isNaN(lat) || Number.isNaN(lng)) {
             setError("Select exact location from map or provide valid coordinates.");
             return;
@@ -223,8 +290,26 @@ export default function OwnerBedsPage() {
                 lng,
                 nearRailwayKm: Number.isNaN(nearRailwayKm) ? 0 : nearRailwayKm,
                 nearBusKm: Number.isNaN(nearBusKm) ? 0 : nearBusKm,
+                nearRailwayName: propertyForm.nearRailwayName.trim(),
+                nearBusName: propertyForm.nearBusName.trim(),
+                nearestTransitType: propertyForm.nearestTransitType,
+                nearestTransitName: propertyForm.nearestTransitName.trim(),
+                nearestTransitKm: Number.isNaN(nearestTransitKm) ? null : nearestTransitKm,
             });
-            setPropertyForm({ cityId: "", name: "", exactAddress: "", lat: "", lng: "", nearRailwayKm: "", nearBusKm: "" });
+            setPropertyForm({
+                cityId: "",
+                name: "",
+                exactAddress: "",
+                lat: "",
+                lng: "",
+                nearRailwayKm: "",
+                nearBusKm: "",
+                nearRailwayName: "",
+                nearBusName: "",
+                nearestTransitType: "",
+                nearestTransitName: "",
+                nearestTransitKm: "",
+            });
             setNotice("Property created successfully.");
             await loadData();
         } catch (err) {
@@ -364,7 +449,7 @@ export default function OwnerBedsPage() {
             <section className="mt-8 grid gap-6 lg:grid-cols-2">
                 <article id="add-property" className="glass-card animate-stagger scroll-mt-24 rounded-2xl p-6 lg:col-span-2">
                     <h2 className="text-lg font-semibold">Create Property</h2>
-                    <p className="mt-1 text-xs text-slate-500">Pick exact location directly on map. Nearby bus stand and railway distances auto-calculate.</p>
+                    <p className="mt-1 text-xs text-slate-500">Pick the exact property entrance. We will show consumers the closest useful railway station or bus stand.</p>
                     <form className="mt-4 grid gap-3" onSubmit={handleCreateProperty}>
                         <select value={propertyForm.cityId} onChange={(e) => setPropertyForm((prev) => ({ ...prev, cityId: e.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" required>
                             <option value="">Select city</option>
@@ -375,18 +460,52 @@ export default function OwnerBedsPage() {
                         <input value={propertyForm.name} onChange={(e) => setPropertyForm((prev) => ({ ...prev, name: e.target.value }))} placeholder="Property name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
                         <input value={propertyForm.exactAddress} onChange={(e) => setPropertyForm((prev) => ({ ...prev, exactAddress: e.target.value }))} placeholder="Exact address" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" required />
 
+                        <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-900">Exact map point</p>
+                                    <p className="text-xs text-slate-500">Tap the map or use GPS/city center, then move the marker to the property entrance.</p>
+                                </div>
+                                <div className="text-right text-xs text-slate-500">
+                                    {propertyForm.lat && propertyForm.lng ? (
+                                        <span>{Number(propertyForm.lat).toFixed(5)}, {Number(propertyForm.lng).toFixed(5)}</span>
+                                    ) : (
+                                        <span>No point selected</span>
+                                    )}
+                                </div>
+                            </div>
                         <LocationPickerMap
                             lat={Number(propertyForm.lat)}
                             lng={Number(propertyForm.lng)}
                             onPick={handleMapPick}
                         />
-                        <div className="flex flex-wrap gap-2">
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <button type="button" onClick={handleUseCityCenter} className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition">
+                                    Use City Center
+                                </button>
                             <button type="button" onClick={() => void handleUseCurrentLocation()} className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition">
                                 Use Current GPS
                             </button>
                             <button type="button" onClick={() => void refreshTransitDistances(propertyForm.lat, propertyForm.lng)} disabled={distanceLoading} className="rounded-full border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 hover:bg-sky-50 transition disabled:opacity-60">
-                                {distanceLoading ? "Calculating..." : "Recalculate Distances"}
+                                    {distanceLoading ? "Checking transit..." : "Recheck Transit"}
+                                </button>
+                                <button type="button" onClick={handleResetLocation} className="rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 transition">
+                                    Reset Marker
                             </button>
+                            </div>
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600">
+                                {transitDisplayItems.length > 0 ? (
+                                    <div className="flex flex-wrap gap-2">
+                                        {transitDisplayItems.map((item) => (
+                                            <span key={item.type} className="rounded-full bg-sky-50 px-2.5 py-1 font-semibold text-sky-800">
+                                                {item.label}: {item.formattedDistance}
+                                            </span>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <span>Transit is not calculated yet. Use the map controls or enter distances manually.</span>
+                                )}
+                            </div>
                         </div>
 
                         <div className="grid gap-3 sm:grid-cols-2">
@@ -397,6 +516,15 @@ export default function OwnerBedsPage() {
                             <input value={propertyForm.nearRailwayKm} onChange={(e) => setPropertyForm((prev) => ({ ...prev, nearRailwayKm: e.target.value }))} placeholder="Railway distance (km)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                             <input value={propertyForm.nearBusKm} onChange={(e) => setPropertyForm((prev) => ({ ...prev, nearBusKm: e.target.value }))} placeholder="Bus stand distance (km)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                         </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            <input value={propertyForm.nearRailwayName} onChange={(e) => setPropertyForm((prev) => ({ ...prev, nearRailwayName: e.target.value }))} placeholder="Railway station name (optional)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                            <input value={propertyForm.nearBusName} onChange={(e) => setPropertyForm((prev) => ({ ...prev, nearBusName: e.target.value }))} placeholder="Bus stand name (optional)" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                        </div>
+                        {propertyForm.nearestTransitName || propertyForm.nearestTransitKm ? (
+                            <p className="text-xs text-slate-500">
+                                Nearest transit: {propertyForm.nearestTransitName || propertyForm.nearestTransitType || "Transit"} {formatDistance(propertyForm.nearestTransitKm) ? `(${formatDistance(propertyForm.nearestTransitKm)})` : ""}
+                            </p>
+                        ) : null}
                         <button type="submit" disabled={saving} className="shine-button rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-700 disabled:bg-slate-400 disabled:cursor-not-allowed">
                             {saving ? "Saving..." : "Create Property"}
                         </button>

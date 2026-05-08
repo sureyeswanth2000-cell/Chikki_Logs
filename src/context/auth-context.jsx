@@ -21,6 +21,7 @@ import { authorizeOtpRequest, ensureConsumerProfile, updateOwnProfile } from "@/
 const AuthContext = createContext(null);
 
 const PROFILE_CACHE_KEY = "chikki_profile_cache";
+const DEV_AUTH_BYPASS_KEY = "chikki_local_auth_bypass";
 const OTP_COOLDOWNS_BY_PHONE_KEY = "chikki_otp_cooldowns_by_phone";
 const OTP_SEND_COOLDOWN_SECONDS = 30;
 const OTP_RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60;
@@ -213,6 +214,63 @@ function isLocalDevHost() {
     return host === "localhost" || host === "127.0.0.1";
 }
 
+function isValidDevRole(role) {
+    return role === "consumer" || role === "owner" || role === "operator" || role === "superadmin";
+}
+
+function readDevAuthOverride() {
+    if (!isLocalDevHost() || typeof window === "undefined") {
+        return null;
+    }
+    const queryRole = new URLSearchParams(window.location.search).get("devAuth");
+    if (isValidDevRole(queryRole)) {
+        window.localStorage.setItem(DEV_AUTH_BYPASS_KEY, queryRole);
+        return queryRole;
+    }
+    const storedRole = window.localStorage.getItem(DEV_AUTH_BYPASS_KEY);
+    return isValidDevRole(storedRole) ? storedRole : null;
+}
+
+function clearDevAuthOverride() {
+    if (typeof window === "undefined" || !isLocalDevHost()) {
+        return;
+    }
+    window.localStorage.removeItem(DEV_AUTH_BYPASS_KEY);
+}
+
+function createDevUser(role) {
+    const now = String(Date.now());
+    return {
+        uid: `dev-${role}`,
+        email: `dev-${role}@localhost`,
+        emailVerified: true,
+        displayName: `Dev ${role}`,
+        phoneNumber: "+911111111111",
+        providerData: [],
+        metadata: {
+            creationTime: now,
+            lastSignInTime: now,
+        },
+    };
+}
+
+function createDevProfile(role) {
+    return {
+        role,
+        phoneNumber: "+911111111111",
+        name: `Dev ${role}`,
+        email: `dev-${role}@localhost`,
+        address: "Local development only",
+        accountStatus: "active",
+        hasAadhaar: false,
+        aadhaarLast4: "",
+        aadhaarRefId: "",
+        aadhaarStatus: "",
+        createdAt: null,
+        updatedAt: null,
+    };
+}
+
 function mapUserProfile(data) {
     const roleValue = typeof data.role === "string" ? data.role : "";
     if (!isUserRole(roleValue))
@@ -227,6 +285,7 @@ function mapUserProfile(data) {
         name: typeof data.name === "string" ? data.name : "",
         email: typeof data.email === "string" ? data.email : "",
         address: typeof data.address === "string" ? data.address : "",
+        accountStatus: typeof data.accountStatus === "string" ? data.accountStatus : typeof data.status === "string" ? data.status : "active",
         hasAadhaar: Boolean(aadhaarRefId && aadhaarLast4),
         aadhaarRefId,
         aadhaarLast4,
@@ -291,6 +350,16 @@ export function AuthProvider({ children }) {
     }, [clockNowMs, otpExpiresAtMs]);
 
     useEffect(() => {
+        const devRole = readDevAuthOverride();
+        if (devRole) {
+            const devUser = createDevUser(devRole);
+            const devProfile = createDevProfile(devRole);
+            setUser(devUser);
+            setProfile(devProfile);
+            setLoading(false);
+            return () => {};
+        }
+
         const auth = getClientAuth();
         const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
             setUser(firebaseUser);
@@ -701,6 +770,22 @@ export function AuthProvider({ children }) {
     }, [user]);
 
     const signOutUser = useCallback(async () => {
+        const devRole = readDevAuthOverride();
+        if (devRole) {
+            clearDevAuthOverride();
+            setUser(null);
+            setProfile(null);
+            setOtpSent(false);
+            setLastOtpPhoneNumber("");
+            setLastOtpIsTestNumber(false);
+            setOtpExpiresAtMs(0);
+            setOtpCooldownPhoneNumber("");
+            setOtpCooldownUntilMs(0);
+            confirmationRef.current = null;
+            clearCachedProfile();
+            clearRecaptcha();
+            return;
+        }
         const auth = getClientAuth();
         await signOut(auth);
         setProfile(null);
