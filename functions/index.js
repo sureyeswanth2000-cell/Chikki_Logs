@@ -379,6 +379,7 @@ function profileResponse(data, phoneNumber) {
     name: String(data?.name || ""),
     email: String(data?.email || ""),
     address: String(data?.address || ""),
+    photoURL: String(data?.photoURL || ""),
     hasAadhaar,
     aadhaarRefId,
     aadhaarLast4: aadhaarLast4 ? String(aadhaarLast4) : "",
@@ -1096,12 +1097,19 @@ exports.updateOwnProfile = onCall({ cors: true }, async (request) => {
     ? await upsertAadhaarIdentity({ userId: uid, aadhaar: submittedAadhaar, source: initOnly ? "profile_init" : "profile" })
     : null;
 
+  const submittedPhotoURL = typeof input.photoURL === "string" && input.photoURL.startsWith("https://")
+    ? input.photoURL.trim()
+    : "";
+
   const payload = {
     name: normalizeText(input.name, 120),
     email: normalizeText(input.email, 160),
     address: normalizeText(input.address, 500),
     updatedAt: FieldValue.serverTimestamp(),
   };
+  if (submittedPhotoURL) {
+    payload.photoURL = submittedPhotoURL;
+  }
 
   const userRef = db.collection("users").doc(uid);
   const snap = await userRef.get();

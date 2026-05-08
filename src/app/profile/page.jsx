@@ -1,9 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
 import { ProtectedRoute } from "@/components/auth/protected-route";
-import { updateUserProfile } from "@/lib/firestore/profile";
+import { updateUserProfile, uploadProfilePhoto } from "@/lib/firestore/profile";
 
 function maskAadhaar(value) {
     const digits = String(value ?? "").replace(/\D/g, "").slice(-4);
@@ -45,6 +45,9 @@ function ProfileContent() {
     const [error, setError] = useState(null);
     const [success, setSuccess] = useState(false);
     const [linkSuccess, setLinkSuccess] = useState(false);
+    const [photoUploading, setPhotoUploading] = useState(false);
+    const [photoPreview, setPhotoPreview] = useState(null);
+    const photoInputRef = useRef(null);
 
     const [form, setForm] = useState({
         name: profile?.name ?? "",
@@ -112,6 +115,24 @@ function ProfileContent() {
         }
     }
 
+    async function handlePhotoChange(e) {
+        const file = e.target.files?.[0];
+        if (!file || !user?.uid) return;
+        const preview = URL.createObjectURL(file);
+        setPhotoPreview(preview);
+        setError(null);
+        setPhotoUploading(true);
+        try {
+            await uploadProfilePhoto(user.uid, file);
+            await refreshProfile();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : "Failed to upload photo.");
+            setPhotoPreview(null);
+        } finally {
+            setPhotoUploading(false);
+        }
+    }
+
     async function handleLinkGoogle() {
         setError(null);
         setSuccess(false);
@@ -157,6 +178,47 @@ function ProfileContent() {
                             Sign Out
                         </button>
                     </div>
+                </div>
+
+                {/* Profile Photo */}
+                <div className="mt-6 flex flex-col items-center gap-3">
+                    <button
+                        type="button"
+                        onClick={() => photoInputRef.current?.click()}
+                        disabled={photoUploading}
+                        className="group relative h-24 w-24 overflow-hidden rounded-full border-2 border-slate-200 bg-slate-100 transition hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 disabled:cursor-wait"
+                        title="Change profile photo"
+                        aria-label="Change profile photo"
+                    >
+                        {(photoPreview || profile?.photoURL) ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                                src={photoPreview || profile.photoURL}
+                                alt="Profile photo"
+                                className="h-full w-full object-cover"
+                            />
+                        ) : (
+                            <span className="flex h-full w-full items-center justify-center text-3xl font-bold text-slate-400 select-none">
+                                {(profile?.name || user?.phoneNumber || "?").charAt(0).toUpperCase()}
+                            </span>
+                        )}
+                        <span className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition group-hover:opacity-100 group-focus:opacity-100">
+                            <span className="text-xs font-semibold text-white">
+                                {photoUploading ? "Uploading…" : "Change"}
+                            </span>
+                        </span>
+                    </button>
+                    <input
+                        ref={photoInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        className="sr-only"
+                        onChange={handlePhotoChange}
+                        aria-label="Upload profile photo"
+                    />
+                    <p className="text-xs text-slate-500">
+                        {photoUploading ? "Uploading photo…" : "Click photo to change · Max 2 MB · JPEG / PNG / WebP"}
+                    </p>
                 </div>
 
                 {success && (
