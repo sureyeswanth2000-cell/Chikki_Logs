@@ -59,6 +59,74 @@ npm run dev
 
 Open http://localhost:3000
 
+## Localhost Login Bypass (Dev Only)
+Use this to test role flows quickly without OTP/backend auth. This works only on localhost/127.0.0.1.
+
+Role URLs:
+- consumer: http://localhost:3000/consumer?devAuth=consumer
+- owner: http://localhost:3000/consumer?devAuth=owner
+- operator: http://localhost:3000/operator?devAuth=operator
+- superadmin: http://localhost:3000/internal-control?devAuth=superadmin
+
+Notes:
+- Opening a URL with `?devAuth=<role>` sets a local role override automatically.
+- Switch roles by opening another role URL.
+- To return to normal auth behavior, open pages without `devAuth` and refresh.
+
+## Local Booking Smoke Test (Bypass Mode)
+With consumer bypass URL open, you can test this full path immediately:
+
+1. Search listings on Consumer page.
+2. Open booking review and confirm.
+3. Create booking (mock success in bypass mode).
+4. Back on Consumer page, test open-booking actions:
+	- Check In
+	- Modify booking
+	- Report bed issue
+	- Checkout
+
+These actions are wired for local smoke validation in bypass mode, so they are testable without OTP and without backend auth dependencies.
+
+Reusable QA runner command:
+
+```bash
+npm run qa:dev-bypass
+```
+
+What it does:
+- Opens all role bypass URLs in your default browser
+- Prints a repeatable QA checklist in terminal
+- Appends a run template to `qa-logs/dev-bypass-qa-log.md`
+
+Optional flags:
+
+```bash
+npm run qa:dev-bypass -- --no-open
+npm run qa:dev-bypass -- --no-log
+```
+
+Full website role-coverage checklist generator:
+
+```bash
+npm run qa:roles-full
+```
+
+What it does:
+- Scans all app routes from `src/app/**/page.jsx|tsx`
+- Detects route role access from `ProtectedRoute allowedRoles`
+- Extracts static page actions (buttons, links, forms, select options)
+- Builds role-wise QA checklist files:
+	- `qa-logs/full-role-qa-checklist-latest.md`
+	- timestamped run file in `qa-logs/`
+- Opens role entry URLs for manual walkthrough
+
+Optional flags:
+
+```bash
+npm run qa:roles-full -- --no-open
+npm run qa:roles-full -- --no-log
+```
+
 ## Current Pages
 - / (landing)
 - /consumer
@@ -99,6 +167,18 @@ firebase deploy --only functions:setUserRole
 ```
 
 3. After bootstrap, superadmin can assign roles from backend callable `setUserRole`.
+
+4. Create one test account for each role (consumer, owner, operator, superadmin):
+
+```bash
+npm run seed:role-test-users
+```
+
+Optional flags:
+
+```bash
+npm run seed:role-test-users -- --suffix=qa01 --password=Test@123456 --domain=chikki.local
+```
 
 Credentials note for this app:
 - Login method is Phone OTP.

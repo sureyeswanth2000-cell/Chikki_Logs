@@ -333,7 +333,10 @@ function ProfileContent() {
                         )}
 
                         <p className="text-xs text-slate-500">
-                            Aadhaar is stored in the protected identity vault. Normal profile and booking records keep only the reference ID and masked last 4 digits.
+                            Aadhaar is stored in a protected identity vault. Normal profile and booking records keep only a reference ID and masked last-4 digits.
+                        </p>
+                        <p className="text-xs text-slate-500">
+                            Keep Name, Email, and Address updated to reduce booking friction and support delays.
                         </p>
 
                         <div className="flex gap-3 pt-2">

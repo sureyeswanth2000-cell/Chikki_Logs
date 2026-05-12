@@ -1,0 +1,591 @@
+# Full Role QA Checklist
+
+Generated at: 2026-05-12T19:59:31.807Z
+
+## Entry URLs
+
+- guest: http://localhost:3000/
+- consumer: http://localhost:3000/consumer?devAuth=consumer
+- owner: http://localhost:3000/consumer?devAuth=owner
+- operator: http://localhost:3000/operator?devAuth=operator
+- superadmin: http://localhost:3000/internal-control?devAuth=superadmin
+
+## Global Navigation Options
+
+- [ ] Verify nav option: Apply as Owner
+- [ ] Verify nav option: Consumer
+- [ ] Verify nav option: Dashboard
+- [ ] Verify nav option: Earnings
+- [ ] Verify nav option: History
+- [ ] Verify nav option: Home
+- [ ] Verify nav option: Internal Control
+- [ ] Verify nav option: Inventory
+- [ ] Verify nav option: Operator Console
+- [ ] Verify nav option: Service History
+- [ ] Verify nav option: Superadmin
+- [ ] Verify nav option: Support
+
+## Role: guest
+
+- [ ] Visit /apply-owner
+- [ ] Route source: src/app/apply-owner/page.jsx
+- [ ] /apply-owner: Open anchor: Go to Owner Portal (/owner)
+- [ ] /apply-owner: Open anchor: Login here (/login)
+- [ ] /apply-owner: Select option: Select a city
+- [ ] /apply-owner: Submit form: handleSubmit
+- [ ] Visit /cities
+- [ ] Route source: src/app/cities/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /login
+- [ ] Route source: src/app/login/page.jsx
+- [ ] /login: Click button: Edit phone number
+- [ ] /login: Open link: Back to Home (/)
+- [ ] /login: Submit form: handleSendOtp
+- [ ] /login: Submit form: handleVerifyOtp
+- [ ] /login: Trigger action: handleGoogleLogin
+- [ ] Visit /owner/beds
+- [ ] Route source: src/app/owner/beds/page.jsx
+- [ ] /owner/beds: Click button: Reset Marker
+- [ ] /owner/beds: Click button: Use City Center
+- [ ] /owner/beds: Open link: Edit Profile (/profile)
+- [ ] /owner/beds: Open link: Owner Portal (/owner)
+- [ ] /owner/beds: Select option: AC
+- [ ] /owner/beds: Select option: NON_AC
+- [ ] /owner/beds: Select option: Select bed
+- [ ] /owner/beds: Select option: Select city
+- [ ] /owner/beds: Select option: Select property
+- [ ] /owner/beds: Select option: Select room
+- [ ] /owner/beds: Submit form: handleCreateBed
+- [ ] /owner/beds: Submit form: handleCreateBlock
+- [ ] /owner/beds: Submit form: handleCreateProperty
+- [ ] /owner/beds: Submit form: handleCreateRoom
+- [ ] Visit /owner/properties
+- [ ] Route source: src/app/owner/properties/page.jsx
+- [ ] /owner/properties: Open link: Edit Profile (/profile)
+- [ ] /owner/properties: Open link: Owner Portal (/owner)
+- [ ] /owner/properties: Select option: Select city
+- [ ] /owner/properties: Submit form: handleSubmit
+- [ ] Visit /owner/property-status
+- [ ] Route source: src/app/owner/property-status/page.jsx
+- [ ] /owner/property-status: Click button: void handleToggleBed(bed.id, bed.active)} disabled= className= `}>
+- [ ] /owner/property-status: Open link: Add All (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Bed (/owner/beds#add-bed)
+- [ ] /owner/property-status: Open link: Add Inventory (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Property (/owner/beds#add-property)
+- [ ] /owner/property-status: Open link: Add Room (/owner/beds#add-room)
+- [ ] /owner/property-status: Open link: Dashboard (/owner)
+- [ ] /owner/property-status: Open link: Edit Profile (/profile)
+- [ ] Visit /owner/rooms
+- [ ] Route source: src/app/owner/rooms/page.jsx
+- [ ] /owner/rooms: Open link: Edit Profile (/profile)
+- [ ] /owner/rooms: Open link: Owner Portal (/owner)
+- [ ] /owner/rooms: Select option: Select property
+- [ ] /owner/rooms: Submit form: handleCreateRoom
+- [ ] Visit /page.jsx
+- [ ] Route source: src/app/page.jsx
+- [ ] /page.jsx: Click button: Find Beds
+- [ ] /page.jsx: Click button: Learn More
+- [ ] /page.jsx: Click button: Show Beds
+- [ ] /page.jsx: Click button: Start Consumer Booking
+- [ ] /page.jsx: Open link: Apply as Owner (/apply-owner)
+- [ ] /page.jsx: Open link: Login (/login)
+- [ ] /page.jsx: Open link: Start with Login (/login)
+- [ ] /page.jsx: Select option: Select city manually
+- [ ] /page.jsx: Trigger action: useCurrentLocation
+- [ ] Visit /register
+- [ ] Route source: src/app/register/page.jsx
+- [ ] /register: Click button: Edit phone number
+- [ ] /register: Open link: Back to Home (/)
+- [ ] /register: Open link: Login (/login)
+- [ ] /register: Submit form: handleSendOtp
+- [ ] /register: Submit form: handleVerifyOtp
+- [ ] /register: Trigger action: handleGoogleLogin
+- [ ] Visit /superadmin
+- [ ] Route source: src/app/superadmin/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /support
+- [ ] Route source: src/app/support/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /unauthorized
+- [ ] Route source: src/app/unauthorized/page.jsx
+- [ ] /unauthorized: Open link: Login Again (/login)
+
+## Role: consumer
+
+- [ ] Visit /apply-owner
+- [ ] Route source: src/app/apply-owner/page.jsx
+- [ ] /apply-owner: Open anchor: Go to Owner Portal (/owner)
+- [ ] /apply-owner: Open anchor: Login here (/login)
+- [ ] /apply-owner: Select option: Select a city
+- [ ] /apply-owner: Submit form: handleSubmit
+- [ ] Visit /booking
+- [ ] Route source: src/app/booking/page.jsx
+- [ ] /booking: Click button: Review Booking
+- [ ] /booking: Submit form: handleCreateBooking
+- [ ] /booking: Submit form: handleReview
+- [ ] Visit /cities
+- [ ] Route source: src/app/cities/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /consumer
+- [ ] Route source: src/app/consumer/page.jsx
+- [ ] /consumer: Click button: Clear Location
+- [ ] /consumer: Open anchor: Go to Profile (/profile)
+- [ ] /consumer: Select option: AC Only
+- [ ] /consumer: Select option: All Beds
+- [ ] /consumer: Select option: Already occupied
+- [ ] /consumer: Select option: Cash
+- [ ] /consumer: Select option: Damaged bed
+- [ ] /consumer: Select option: Hourly
+- [ ] /consumer: Select option: Non-AC Only
+- [ ] /consumer: Select option: Online (Razorpay)
+- [ ] /consumer: Select option: Other
+- [ ] /consumer: Select option: Overday
+- [ ] /consumer: Select option: Overnight
+- [ ] /consumer: Select option: Unclean bed
+- [ ] /consumer: Select option: Unsafe/uncomfortable
+- [ ] /consumer: Select option: Wrong bed
+- [ ] /consumer: Submit form
+- [ ] /consumer: Submit form: handleSearch
+- [ ] Visit /history
+- [ ] Route source: src/app/history/page.jsx
+- [ ] /history: Select option: 1/5
+- [ ] /history: Select option: 2/5
+- [ ] /history: Select option: 3/5
+- [ ] /history: Select option: 4/5
+- [ ] /history: Select option: 5/5
+- [ ] /history: Select option: Last 1 Day
+- [ ] /history: Select option: Last 1 Month
+- [ ] /history: Select option: Last 1 Week
+- [ ] /history: Submit form
+- [ ] /history: Submit form: handleLoadHistory
+- [ ] Visit /login
+- [ ] Route source: src/app/login/page.jsx
+- [ ] /login: Click button: Edit phone number
+- [ ] /login: Open link: Back to Home (/)
+- [ ] /login: Submit form: handleSendOtp
+- [ ] /login: Submit form: handleVerifyOtp
+- [ ] /login: Trigger action: handleGoogleLogin
+- [ ] Visit /owner/beds
+- [ ] Route source: src/app/owner/beds/page.jsx
+- [ ] /owner/beds: Click button: Reset Marker
+- [ ] /owner/beds: Click button: Use City Center
+- [ ] /owner/beds: Open link: Edit Profile (/profile)
+- [ ] /owner/beds: Open link: Owner Portal (/owner)
+- [ ] /owner/beds: Select option: AC
+- [ ] /owner/beds: Select option: NON_AC
+- [ ] /owner/beds: Select option: Select bed
+- [ ] /owner/beds: Select option: Select city
+- [ ] /owner/beds: Select option: Select property
+- [ ] /owner/beds: Select option: Select room
+- [ ] /owner/beds: Submit form: handleCreateBed
+- [ ] /owner/beds: Submit form: handleCreateBlock
+- [ ] /owner/beds: Submit form: handleCreateProperty
+- [ ] /owner/beds: Submit form: handleCreateRoom
+- [ ] Visit /owner/properties
+- [ ] Route source: src/app/owner/properties/page.jsx
+- [ ] /owner/properties: Open link: Edit Profile (/profile)
+- [ ] /owner/properties: Open link: Owner Portal (/owner)
+- [ ] /owner/properties: Select option: Select city
+- [ ] /owner/properties: Submit form: handleSubmit
+- [ ] Visit /owner/property-status
+- [ ] Route source: src/app/owner/property-status/page.jsx
+- [ ] /owner/property-status: Click button: void handleToggleBed(bed.id, bed.active)} disabled= className= `}>
+- [ ] /owner/property-status: Open link: Add All (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Bed (/owner/beds#add-bed)
+- [ ] /owner/property-status: Open link: Add Inventory (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Property (/owner/beds#add-property)
+- [ ] /owner/property-status: Open link: Add Room (/owner/beds#add-room)
+- [ ] /owner/property-status: Open link: Dashboard (/owner)
+- [ ] /owner/property-status: Open link: Edit Profile (/profile)
+- [ ] Visit /owner/rooms
+- [ ] Route source: src/app/owner/rooms/page.jsx
+- [ ] /owner/rooms: Open link: Edit Profile (/profile)
+- [ ] /owner/rooms: Open link: Owner Portal (/owner)
+- [ ] /owner/rooms: Select option: Select property
+- [ ] /owner/rooms: Submit form: handleCreateRoom
+- [ ] Visit /page.jsx
+- [ ] Route source: src/app/page.jsx
+- [ ] /page.jsx: Click button: Find Beds
+- [ ] /page.jsx: Click button: Learn More
+- [ ] /page.jsx: Click button: Show Beds
+- [ ] /page.jsx: Click button: Start Consumer Booking
+- [ ] /page.jsx: Open link: Apply as Owner (/apply-owner)
+- [ ] /page.jsx: Open link: Login (/login)
+- [ ] /page.jsx: Open link: Start with Login (/login)
+- [ ] /page.jsx: Select option: Select city manually
+- [ ] /page.jsx: Trigger action: useCurrentLocation
+- [ ] Visit /profile
+- [ ] Route source: src/app/profile/page.jsx
+- [ ] /profile: Click button: Edit Profile
+- [ ] /profile: Click button: Sign Out
+- [ ] /profile: Submit form: handleSave
+- [ ] /profile: Trigger action: handleLinkGoogle
+- [ ] Visit /register
+- [ ] Route source: src/app/register/page.jsx
+- [ ] /register: Click button: Edit phone number
+- [ ] /register: Open link: Back to Home (/)
+- [ ] /register: Open link: Login (/login)
+- [ ] /register: Submit form: handleSendOtp
+- [ ] /register: Submit form: handleVerifyOtp
+- [ ] /register: Trigger action: handleGoogleLogin
+- [ ] Visit /superadmin
+- [ ] Route source: src/app/superadmin/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /support
+- [ ] Route source: src/app/support/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /unauthorized
+- [ ] Route source: src/app/unauthorized/page.jsx
+- [ ] /unauthorized: Open link: Login Again (/login)
+
+## Role: owner
+
+- [ ] Visit /apply-owner
+- [ ] Route source: src/app/apply-owner/page.jsx
+- [ ] /apply-owner: Open anchor: Go to Owner Portal (/owner)
+- [ ] /apply-owner: Open anchor: Login here (/login)
+- [ ] /apply-owner: Select option: Select a city
+- [ ] /apply-owner: Submit form: handleSubmit
+- [ ] Visit /booking
+- [ ] Route source: src/app/booking/page.jsx
+- [ ] /booking: Click button: Review Booking
+- [ ] /booking: Submit form: handleCreateBooking
+- [ ] /booking: Submit form: handleReview
+- [ ] Visit /cities
+- [ ] Route source: src/app/cities/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /consumer
+- [ ] Route source: src/app/consumer/page.jsx
+- [ ] /consumer: Click button: Clear Location
+- [ ] /consumer: Open anchor: Go to Profile (/profile)
+- [ ] /consumer: Select option: AC Only
+- [ ] /consumer: Select option: All Beds
+- [ ] /consumer: Select option: Already occupied
+- [ ] /consumer: Select option: Cash
+- [ ] /consumer: Select option: Damaged bed
+- [ ] /consumer: Select option: Hourly
+- [ ] /consumer: Select option: Non-AC Only
+- [ ] /consumer: Select option: Online (Razorpay)
+- [ ] /consumer: Select option: Other
+- [ ] /consumer: Select option: Overday
+- [ ] /consumer: Select option: Overnight
+- [ ] /consumer: Select option: Unclean bed
+- [ ] /consumer: Select option: Unsafe/uncomfortable
+- [ ] /consumer: Select option: Wrong bed
+- [ ] /consumer: Submit form
+- [ ] /consumer: Submit form: handleSearch
+- [ ] Visit /history
+- [ ] Route source: src/app/history/page.jsx
+- [ ] /history: Select option: 1/5
+- [ ] /history: Select option: 2/5
+- [ ] /history: Select option: 3/5
+- [ ] /history: Select option: 4/5
+- [ ] /history: Select option: 5/5
+- [ ] /history: Select option: Last 1 Day
+- [ ] /history: Select option: Last 1 Month
+- [ ] /history: Select option: Last 1 Week
+- [ ] /history: Submit form
+- [ ] /history: Submit form: handleLoadHistory
+- [ ] Visit /login
+- [ ] Route source: src/app/login/page.jsx
+- [ ] /login: Click button: Edit phone number
+- [ ] /login: Open link: Back to Home (/)
+- [ ] /login: Submit form: handleSendOtp
+- [ ] /login: Submit form: handleVerifyOtp
+- [ ] /login: Trigger action: handleGoogleLogin
+- [ ] Visit /owner
+- [ ] Route source: src/app/owner/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /owner/beds
+- [ ] Route source: src/app/owner/beds/page.jsx
+- [ ] /owner/beds: Click button: Reset Marker
+- [ ] /owner/beds: Click button: Use City Center
+- [ ] /owner/beds: Open link: Edit Profile (/profile)
+- [ ] /owner/beds: Open link: Owner Portal (/owner)
+- [ ] /owner/beds: Select option: AC
+- [ ] /owner/beds: Select option: NON_AC
+- [ ] /owner/beds: Select option: Select bed
+- [ ] /owner/beds: Select option: Select city
+- [ ] /owner/beds: Select option: Select property
+- [ ] /owner/beds: Select option: Select room
+- [ ] /owner/beds: Submit form: handleCreateBed
+- [ ] /owner/beds: Submit form: handleCreateBlock
+- [ ] /owner/beds: Submit form: handleCreateProperty
+- [ ] /owner/beds: Submit form: handleCreateRoom
+- [ ] Visit /owner/earnings
+- [ ] Route source: src/app/owner/earnings/page.jsx
+- [ ] /owner/earnings: Open link: Dashboard (/owner)
+- [ ] /owner/earnings: Select option: All Time
+- [ ] /owner/earnings: Select option: Custom Date
+- [ ] /owner/earnings: Select option: This Month
+- [ ] /owner/earnings: Select option: This Week
+- [ ] /owner/earnings: Select option: Today
+- [ ] /owner/earnings: Submit form: handleLoadEarnings
+- [ ] Visit /owner/properties
+- [ ] Route source: src/app/owner/properties/page.jsx
+- [ ] /owner/properties: Open link: Edit Profile (/profile)
+- [ ] /owner/properties: Open link: Owner Portal (/owner)
+- [ ] /owner/properties: Select option: Select city
+- [ ] /owner/properties: Submit form: handleSubmit
+- [ ] Visit /owner/property-status
+- [ ] Route source: src/app/owner/property-status/page.jsx
+- [ ] /owner/property-status: Click button: void handleToggleBed(bed.id, bed.active)} disabled= className= `}>
+- [ ] /owner/property-status: Open link: Add All (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Bed (/owner/beds#add-bed)
+- [ ] /owner/property-status: Open link: Add Inventory (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Property (/owner/beds#add-property)
+- [ ] /owner/property-status: Open link: Add Room (/owner/beds#add-room)
+- [ ] /owner/property-status: Open link: Dashboard (/owner)
+- [ ] /owner/property-status: Open link: Edit Profile (/profile)
+- [ ] Visit /owner/rooms
+- [ ] Route source: src/app/owner/rooms/page.jsx
+- [ ] /owner/rooms: Open link: Edit Profile (/profile)
+- [ ] /owner/rooms: Open link: Owner Portal (/owner)
+- [ ] /owner/rooms: Select option: Select property
+- [ ] /owner/rooms: Submit form: handleCreateRoom
+- [ ] Visit /page.jsx
+- [ ] Route source: src/app/page.jsx
+- [ ] /page.jsx: Click button: Find Beds
+- [ ] /page.jsx: Click button: Learn More
+- [ ] /page.jsx: Click button: Show Beds
+- [ ] /page.jsx: Click button: Start Consumer Booking
+- [ ] /page.jsx: Open link: Apply as Owner (/apply-owner)
+- [ ] /page.jsx: Open link: Login (/login)
+- [ ] /page.jsx: Open link: Start with Login (/login)
+- [ ] /page.jsx: Select option: Select city manually
+- [ ] /page.jsx: Trigger action: useCurrentLocation
+- [ ] Visit /profile
+- [ ] Route source: src/app/profile/page.jsx
+- [ ] /profile: Click button: Edit Profile
+- [ ] /profile: Click button: Sign Out
+- [ ] /profile: Submit form: handleSave
+- [ ] /profile: Trigger action: handleLinkGoogle
+- [ ] Visit /register
+- [ ] Route source: src/app/register/page.jsx
+- [ ] /register: Click button: Edit phone number
+- [ ] /register: Open link: Back to Home (/)
+- [ ] /register: Open link: Login (/login)
+- [ ] /register: Submit form: handleSendOtp
+- [ ] /register: Submit form: handleVerifyOtp
+- [ ] /register: Trigger action: handleGoogleLogin
+- [ ] Visit /superadmin
+- [ ] Route source: src/app/superadmin/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /support
+- [ ] Route source: src/app/support/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /unauthorized
+- [ ] Route source: src/app/unauthorized/page.jsx
+- [ ] /unauthorized: Open link: Login Again (/login)
+
+## Role: operator
+
+- [ ] Visit /apply-owner
+- [ ] Route source: src/app/apply-owner/page.jsx
+- [ ] /apply-owner: Open anchor: Go to Owner Portal (/owner)
+- [ ] /apply-owner: Open anchor: Login here (/login)
+- [ ] /apply-owner: Select option: Select a city
+- [ ] /apply-owner: Submit form: handleSubmit
+- [ ] Visit /cities
+- [ ] Route source: src/app/cities/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /login
+- [ ] Route source: src/app/login/page.jsx
+- [ ] /login: Click button: Edit phone number
+- [ ] /login: Open link: Back to Home (/)
+- [ ] /login: Submit form: handleSendOtp
+- [ ] /login: Submit form: handleVerifyOtp
+- [ ] /login: Trigger action: handleGoogleLogin
+- [ ] Visit /operator
+- [ ] Route source: src/app/operator/page.jsx
+- [ ] /operator: Click button: + Add City
+- [ ] /operator: Click button: void handleDisableCity(city)} className= `} >
+- [ ] /operator: Click button: void handleToggleBookingBlock(owner)} className= `} >
+- [ ] /operator: Click button: void handleToggleScarcity(city)} className= `} >
+- [ ] /operator: Submit form
+- [ ] Visit /owner/beds
+- [ ] Route source: src/app/owner/beds/page.jsx
+- [ ] /owner/beds: Click button: Reset Marker
+- [ ] /owner/beds: Click button: Use City Center
+- [ ] /owner/beds: Open link: Edit Profile (/profile)
+- [ ] /owner/beds: Open link: Owner Portal (/owner)
+- [ ] /owner/beds: Select option: AC
+- [ ] /owner/beds: Select option: NON_AC
+- [ ] /owner/beds: Select option: Select bed
+- [ ] /owner/beds: Select option: Select city
+- [ ] /owner/beds: Select option: Select property
+- [ ] /owner/beds: Select option: Select room
+- [ ] /owner/beds: Submit form: handleCreateBed
+- [ ] /owner/beds: Submit form: handleCreateBlock
+- [ ] /owner/beds: Submit form: handleCreateProperty
+- [ ] /owner/beds: Submit form: handleCreateRoom
+- [ ] Visit /owner/properties
+- [ ] Route source: src/app/owner/properties/page.jsx
+- [ ] /owner/properties: Open link: Edit Profile (/profile)
+- [ ] /owner/properties: Open link: Owner Portal (/owner)
+- [ ] /owner/properties: Select option: Select city
+- [ ] /owner/properties: Submit form: handleSubmit
+- [ ] Visit /owner/property-status
+- [ ] Route source: src/app/owner/property-status/page.jsx
+- [ ] /owner/property-status: Click button: void handleToggleBed(bed.id, bed.active)} disabled= className= `}>
+- [ ] /owner/property-status: Open link: Add All (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Bed (/owner/beds#add-bed)
+- [ ] /owner/property-status: Open link: Add Inventory (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Property (/owner/beds#add-property)
+- [ ] /owner/property-status: Open link: Add Room (/owner/beds#add-room)
+- [ ] /owner/property-status: Open link: Dashboard (/owner)
+- [ ] /owner/property-status: Open link: Edit Profile (/profile)
+- [ ] Visit /owner/rooms
+- [ ] Route source: src/app/owner/rooms/page.jsx
+- [ ] /owner/rooms: Open link: Edit Profile (/profile)
+- [ ] /owner/rooms: Open link: Owner Portal (/owner)
+- [ ] /owner/rooms: Select option: Select property
+- [ ] /owner/rooms: Submit form: handleCreateRoom
+- [ ] Visit /page.jsx
+- [ ] Route source: src/app/page.jsx
+- [ ] /page.jsx: Click button: Find Beds
+- [ ] /page.jsx: Click button: Learn More
+- [ ] /page.jsx: Click button: Show Beds
+- [ ] /page.jsx: Click button: Start Consumer Booking
+- [ ] /page.jsx: Open link: Apply as Owner (/apply-owner)
+- [ ] /page.jsx: Open link: Login (/login)
+- [ ] /page.jsx: Open link: Start with Login (/login)
+- [ ] /page.jsx: Select option: Select city manually
+- [ ] /page.jsx: Trigger action: useCurrentLocation
+- [ ] Visit /profile
+- [ ] Route source: src/app/profile/page.jsx
+- [ ] /profile: Click button: Edit Profile
+- [ ] /profile: Click button: Sign Out
+- [ ] /profile: Submit form: handleSave
+- [ ] /profile: Trigger action: handleLinkGoogle
+- [ ] Visit /register
+- [ ] Route source: src/app/register/page.jsx
+- [ ] /register: Click button: Edit phone number
+- [ ] /register: Open link: Back to Home (/)
+- [ ] /register: Open link: Login (/login)
+- [ ] /register: Submit form: handleSendOtp
+- [ ] /register: Submit form: handleVerifyOtp
+- [ ] /register: Trigger action: handleGoogleLogin
+- [ ] Visit /superadmin
+- [ ] Route source: src/app/superadmin/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /support
+- [ ] Route source: src/app/support/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /unauthorized
+- [ ] Route source: src/app/unauthorized/page.jsx
+- [ ] /unauthorized: Open link: Login Again (/login)
+
+## Role: superadmin
+
+- [ ] Visit /apply-owner
+- [ ] Route source: src/app/apply-owner/page.jsx
+- [ ] /apply-owner: Open anchor: Go to Owner Portal (/owner)
+- [ ] /apply-owner: Open anchor: Login here (/login)
+- [ ] /apply-owner: Select option: Select a city
+- [ ] /apply-owner: Submit form: handleSubmit
+- [ ] Visit /cities
+- [ ] Route source: src/app/cities/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /internal-control
+- [ ] Route source: src/app/internal-control/page.jsx
+- [ ] /internal-control: Click button: + Add City
+- [ ] /internal-control: Click button: onToggleScarcity(city)} className= `} >
+- [ ] /internal-control: Click button: Open Break-Glass Form
+- [ ] /internal-control: Click button: setActiveTab(tab.id)} className= `} >
+- [ ] /internal-control: Click button: void handleToggleBookingBlock(owner)} className= `} >
+- [ ] /internal-control: Select option: Bank Account
+- [ ] /internal-control: Select option: Elite
+- [ ] /internal-control: Select option: Premium
+- [ ] /internal-control: Select option: Priority
+- [ ] /internal-control: Select option: Standard
+- [ ] /internal-control: Select option: UPI VPA
+- [ ] /internal-control: Submit form
+- [ ] /internal-control: Submit form: handleSaveCommission
+- [ ] /internal-control: Submit form: handleSaveSettings
+- [ ] /internal-control: Trigger action: async
+- [ ] Visit /login
+- [ ] Route source: src/app/login/page.jsx
+- [ ] /login: Click button: Edit phone number
+- [ ] /login: Open link: Back to Home (/)
+- [ ] /login: Submit form: handleSendOtp
+- [ ] /login: Submit form: handleVerifyOtp
+- [ ] /login: Trigger action: handleGoogleLogin
+- [ ] Visit /owner/beds
+- [ ] Route source: src/app/owner/beds/page.jsx
+- [ ] /owner/beds: Click button: Reset Marker
+- [ ] /owner/beds: Click button: Use City Center
+- [ ] /owner/beds: Open link: Edit Profile (/profile)
+- [ ] /owner/beds: Open link: Owner Portal (/owner)
+- [ ] /owner/beds: Select option: AC
+- [ ] /owner/beds: Select option: NON_AC
+- [ ] /owner/beds: Select option: Select bed
+- [ ] /owner/beds: Select option: Select city
+- [ ] /owner/beds: Select option: Select property
+- [ ] /owner/beds: Select option: Select room
+- [ ] /owner/beds: Submit form: handleCreateBed
+- [ ] /owner/beds: Submit form: handleCreateBlock
+- [ ] /owner/beds: Submit form: handleCreateProperty
+- [ ] /owner/beds: Submit form: handleCreateRoom
+- [ ] Visit /owner/properties
+- [ ] Route source: src/app/owner/properties/page.jsx
+- [ ] /owner/properties: Open link: Edit Profile (/profile)
+- [ ] /owner/properties: Open link: Owner Portal (/owner)
+- [ ] /owner/properties: Select option: Select city
+- [ ] /owner/properties: Submit form: handleSubmit
+- [ ] Visit /owner/property-status
+- [ ] Route source: src/app/owner/property-status/page.jsx
+- [ ] /owner/property-status: Click button: void handleToggleBed(bed.id, bed.active)} disabled= className= `}>
+- [ ] /owner/property-status: Open link: Add All (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Bed (/owner/beds#add-bed)
+- [ ] /owner/property-status: Open link: Add Inventory (/owner/beds)
+- [ ] /owner/property-status: Open link: Add Property (/owner/beds#add-property)
+- [ ] /owner/property-status: Open link: Add Room (/owner/beds#add-room)
+- [ ] /owner/property-status: Open link: Dashboard (/owner)
+- [ ] /owner/property-status: Open link: Edit Profile (/profile)
+- [ ] Visit /owner/rooms
+- [ ] Route source: src/app/owner/rooms/page.jsx
+- [ ] /owner/rooms: Open link: Edit Profile (/profile)
+- [ ] /owner/rooms: Open link: Owner Portal (/owner)
+- [ ] /owner/rooms: Select option: Select property
+- [ ] /owner/rooms: Submit form: handleCreateRoom
+- [ ] Visit /page.jsx
+- [ ] Route source: src/app/page.jsx
+- [ ] /page.jsx: Click button: Find Beds
+- [ ] /page.jsx: Click button: Learn More
+- [ ] /page.jsx: Click button: Show Beds
+- [ ] /page.jsx: Click button: Start Consumer Booking
+- [ ] /page.jsx: Open link: Apply as Owner (/apply-owner)
+- [ ] /page.jsx: Open link: Login (/login)
+- [ ] /page.jsx: Open link: Start with Login (/login)
+- [ ] /page.jsx: Select option: Select city manually
+- [ ] /page.jsx: Trigger action: useCurrentLocation
+- [ ] Visit /profile
+- [ ] Route source: src/app/profile/page.jsx
+- [ ] /profile: Click button: Edit Profile
+- [ ] /profile: Click button: Sign Out
+- [ ] /profile: Submit form: handleSave
+- [ ] /profile: Trigger action: handleLinkGoogle
+- [ ] Visit /register
+- [ ] Route source: src/app/register/page.jsx
+- [ ] /register: Click button: Edit phone number
+- [ ] /register: Open link: Back to Home (/)
+- [ ] /register: Open link: Login (/login)
+- [ ] /register: Submit form: handleSendOtp
+- [ ] /register: Submit form: handleVerifyOtp
+- [ ] /register: Trigger action: handleGoogleLogin
+- [ ] Visit /superadmin
+- [ ] Route source: src/app/superadmin/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /support
+- [ ] Route source: src/app/support/page.jsx
+- [ ] No static actions detected on this route
+- [ ] Visit /unauthorized
+- [ ] Route source: src/app/unauthorized/page.jsx
+- [ ] /unauthorized: Open link: Login Again (/login)
+
+## Notes
+
+- This checklist is generated from source files (routes + static JSX actions).
+- Dynamic UI that depends on runtime API data may show extra actions during testing.
+- Run with localhost dev bypass for fast role-by-role QA.

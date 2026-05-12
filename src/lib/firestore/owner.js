@@ -152,7 +152,7 @@ export async function createProperty(ownerId, payload) {
         nearestTransitType: payload.nearestTransitType ?? "",
         nearestTransitName: payload.nearestTransitName ?? "",
         nearestTransitKm: payload.nearestTransitKm ?? null,
-        status: "active",
+        status: "pending_approval",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     });
@@ -184,6 +184,17 @@ export async function getOwnerProperties(ownerId) {
     return items.sort((a, b) => a.name.localeCompare(b.name));
 }
 export async function togglePropertyActive(propertyId, active) {
+    const propertySnapshot = await getDoc(doc(db, COLLECTIONS.properties, propertyId));
+    if (!propertySnapshot.exists()) {
+        throw new Error("Property not found.");
+    }
+    const currentStatus = String(propertySnapshot.data()?.status ?? "");
+    if (currentStatus === "pending_approval") {
+        throw new Error("This property is pending operator/superadmin approval.");
+    }
+    if (currentStatus === "rejected") {
+        throw new Error("This property was rejected and cannot be enabled.");
+    }
     await updateDoc(doc(db, COLLECTIONS.properties, propertyId), {
         status: active ? "active" : "inactive",
         updatedAt: serverTimestamp(),

@@ -310,7 +310,7 @@ export default function OwnerBedsPage() {
                 nearestTransitName: "",
                 nearestTransitKm: "",
             });
-            setNotice("Property created successfully.");
+            setNotice("Property submitted for operator/superadmin approval. It will become active after approval.");
             await loadData();
         } catch (err) {
             setError(err instanceof Error ? err.message : "Could not create property.");

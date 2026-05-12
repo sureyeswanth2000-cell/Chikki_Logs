@@ -3,13 +3,20 @@ import { getAuth } from "firebase/auth";
 import { db } from "@/lib/firebase";
 import { COLLECTIONS } from "@/lib/firestore/collections";
 import {
+  approveOwnerProperty,
   confirmCommissionDueSettlement,
+  getOwnerPayoutAccount,
+  rejectOwnerProperty,
   revealAadhaarBreakGlass,
   runCommissionDuesNow,
+  syncOwnerPrivilegeTiersFromCommission,
   setDemandScopeOverride,
   setOwnerCommissionOverride,
+  updateOwnerPrivilegeTier,
   setUserRole,
   updateDemandPricingSettings,
+  upsertOwnerPayoutAccount,
+  verifyOwnerPayoutBankAccount,
   updatePlatformDefaultCommission,
 } from "@/lib/cloud/security";
 
@@ -366,6 +373,9 @@ export async function searchUserByPhone(phone) {
   if (snapshot.empty) return null;
   const d = snapshot.docs[0];
   const data = d.data();
+  const payout = data?.payoutAccount && typeof data.payoutAccount === "object" ? data.payoutAccount : null;
+  const percent = Number(data.ownerRevenueSharePercent ?? 10);
+  const fallbackTier = percent >= 25 ? "premium" : percent >= 18 ? "elite" : percent >= 12 ? "priority" : "standard";
   return {
     id: d.id,
     name: String(data.name ?? ""),
@@ -377,6 +387,12 @@ export async function searchUserByPhone(phone) {
     aadhaarRefId: String(data.aadhaarRefId ?? ""),
     aadhaarLast4: String(data.aadhaarLast4 ?? ""),
     aadhaarStatus: String(data.aadhaarStatus ?? ""),
+    ownerPrivilegeTier: String(data.ownerPrivilegeTier ?? fallbackTier),
+    payoutType: payout ? String(payout.type ?? "") : "",
+    payoutStatus: payout ? String(payout.status ?? "verification_pending") : "not_configured",
+    payoutBankAccountMasked: payout ? String(payout.bankAccountMasked ?? "") : "",
+    payoutUpiVpaMasked: payout ? String(payout.upiVpaMasked ?? "") : "",
+    payoutAccountHolderName: payout ? String(payout.accountHolderName ?? "") : "",
   };
 }
 
@@ -474,6 +490,51 @@ export async function rejectOwnerApplication(applicationId) {
     updatedAt: serverTimestamp(),
   });
   await writeAuditLog("owner_application_rejected", "owner_application", applicationId, {});
+}
+
+export async function getPendingPropertyApprovals() {
+  const [propertySnap, ownerSnap] = await Promise.all([
+    getDocs(query(collection(db, COLLECTIONS.properties), where("status", "==", "pending_approval"))),
+    getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "owner"))),
+  ]);
+
+  const ownerMap = new Map();
+  ownerSnap.docs.forEach((item) => {
+    const data = item.data() || {};
+    ownerMap.set(item.id, {
+      ownerName: String(data.name ?? ""),
+      ownerPhone: String(data.phone ?? data.phoneNumber ?? ""),
+    });
+  });
+
+  return propertySnap.docs
+    .map((item) => {
+      const data = item.data() || {};
+      const ownerId = String(data.ownerId ?? "");
+      const owner = ownerMap.get(ownerId) ?? { ownerName: "", ownerPhone: "" };
+      return {
+        id: item.id,
+        ownerId,
+        ownerName: owner.ownerName,
+        ownerPhone: owner.ownerPhone,
+        name: String(data.name ?? ""),
+        cityName: String(data.cityName ?? ""),
+        exactAddress: String(data.exactAddress ?? ""),
+        createdAt: data.createdAt ?? null,
+        status: String(data.status ?? "pending_approval"),
+      };
+    })
+    .sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")) || a.name.localeCompare(b.name));
+}
+
+export async function approvePendingProperty(propertyId) {
+  if (!propertyId) throw new Error("propertyId is required.");
+  return approveOwnerProperty({ propertyId });
+}
+
+export async function rejectPendingProperty(propertyId, reason = "") {
+  if (!propertyId) throw new Error("propertyId is required.");
+  return rejectOwnerProperty({ propertyId, reason });
 }
 
 // Platform settings are stored as a special doc inside the cities collection
@@ -686,25 +747,78 @@ export async function getDailyGrowthOverview() {
   yesterdayStart.setDate(yesterdayStart.getDate() - 1);
   const tMs = todayStart.getTime();
   const yMs = yesterdayStart.getTime();
+  const todayKey = todayStart.toISOString().slice(0, 10);
+  const yesterdayKey = yesterdayStart.toISOString().slice(0, 10);
 
-  const [bookingsSnap, paymentsSnap] = await Promise.all([
+  const [bookingsSnap, paymentsSnap, propertiesSnap, bedsSnap, citiesSnap, platformCfgSnap] = await Promise.all([
     getDocs(collection(db, COLLECTIONS.bookings)),
     getDocs(collection(db, COLLECTIONS.payments)),
+    getDocs(collection(db, COLLECTIONS.properties)),
+    getDocs(collection(db, COLLECTIONS.beds)),
+    getDocs(collection(db, COLLECTIONS.cities)),
+    getDoc(doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC)),
   ]);
+
+  const cityNameById = {};
+  citiesSnap.docs.forEach((docSnap) => {
+    if (docSnap.id === PLATFORM_SETTINGS_CITY_DOC) return;
+    const data = docSnap.data() || {};
+    cityNameById[docSnap.id] = String(data.name ?? docSnap.id);
+  });
+
+  const propertyCityById = {};
+  propertiesSnap.docs.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    propertyCityById[docSnap.id] = String(data.cityId ?? "");
+  });
+
+  const todayCityMap = {};
+  const ensureCityRow = (cityId) => {
+    if (!cityId) return null;
+    if (!todayCityMap[cityId]) {
+      todayCityMap[cityId] = {
+        cityId,
+        cityName: cityNameById[cityId] ?? "Unknown",
+        bookings: 0,
+        revenue: 0,
+        activeBeds: 0,
+      };
+    }
+    return todayCityMap[cityId];
+  };
+
+  bedsSnap.docs.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    if (data.active === false) return;
+    const cityId = propertyCityById[String(data.propertyId ?? "")] ?? "";
+    const row = ensureCityRow(cityId);
+    if (row) row.activeBeds += 1;
+  });
 
   const metrics = {
     today: { bookings: 0, checkIns: 0, cancellations: 0, revenue: 0 },
     yesterday: { bookings: 0, checkIns: 0, cancellations: 0, revenue: 0 },
   };
 
+  const bookingCityByBookingId = {};
+
   bookingsSnap.docs.forEach((docSnap) => {
     const d = docSnap.data() || {};
+    const bookingId = docSnap.id;
     const createdMs = typeof d.createdAt?.toMillis === "function" ? d.createdAt.toMillis() : 0;
     const checkInMs = typeof d.checkInAt?.toMillis === "function" ? d.checkInAt.toMillis() : 0;
     const cancelledMs = typeof d.cancelledAt?.toMillis === "function" ? d.cancelledAt.toMillis() : 0;
+    const cityId = propertyCityById[String(d.propertyId ?? "")] ?? "";
+    bookingCityByBookingId[bookingId] = cityId;
 
     const bucket = createdMs >= tMs ? "today" : createdMs >= yMs ? "yesterday" : null;
-    if (bucket) metrics[bucket].bookings += 1;
+    if (bucket) {
+      metrics[bucket].bookings += 1;
+      if (bucket === "today") {
+        const row = ensureCityRow(cityId);
+        if (row) row.bookings += 1;
+      }
+    }
 
     if (checkInMs) {
       const cBucket = checkInMs >= tMs ? "today" : checkInMs >= yMs ? "yesterday" : null;
@@ -722,10 +836,48 @@ export async function getDailyGrowthOverview() {
     const amount = Number(d.totalAmount ?? 0);
     if (!Number.isFinite(amount) || amount <= 0) return;
     const bucket = createdMs >= tMs ? "today" : createdMs >= yMs ? "yesterday" : null;
-    if (bucket) metrics[bucket].revenue += amount;
+    if (bucket) {
+      metrics[bucket].revenue += amount;
+      if (bucket === "today") {
+        const cityId = bookingCityByBookingId[String(d.bookingId ?? "")] ?? "";
+        const row = ensureCityRow(cityId);
+        if (row) row.revenue += amount;
+      }
+    }
   });
 
-  return metrics;
+  const cityBreakdownToday = Object.values(todayCityMap)
+    .sort((a, b) => b.bookings - a.bookings || b.revenue - a.revenue || a.cityName.localeCompare(b.cityName));
+
+  const topPerformingCities = [...cityBreakdownToday]
+    .sort((a, b) => b.revenue - a.revenue || b.bookings - a.bookings || a.cityName.localeCompare(b.cityName))
+    .slice(0, 5);
+
+  const previousSnapshots = (platformCfgSnap.exists() ? (platformCfgSnap.data()?.dailyGrowthSnapshots ?? {}) : {}) || {};
+  const nextTodaySnapshot = {
+    ...metrics.today,
+    cityBreakdownToday,
+    topPerformingCities,
+    updatedAtIso: now.toISOString(),
+  };
+  await setDoc(
+    doc(db, COLLECTIONS.cities, PLATFORM_SETTINGS_CITY_DOC),
+    {
+      dailyGrowthSnapshots: {
+        ...previousSnapshots,
+        [todayKey]: nextTodaySnapshot,
+      },
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return {
+    ...metrics,
+    cityBreakdownToday,
+    topPerformingCities,
+    snapshotDates: [yesterdayKey, todayKey],
+  };
 }
 
 // Role-change audit log
@@ -765,12 +917,47 @@ export async function getOwnersWithBlockStatus() {
   const snap = await getDocs(query(collection(db, COLLECTIONS.users), where("role", "==", "owner")));
   return snap.docs.map((docSnap) => {
     const d = docSnap.data() || {};
+    const payout = d.payoutAccount && typeof d.payoutAccount === "object" ? d.payoutAccount : null;
+    const percent = typeof d.ownerRevenueSharePercent === "number" ? Number(d.ownerRevenueSharePercent) : 0;
+    const fallbackTier = percent >= 25 ? "premium" : percent >= 18 ? "elite" : percent >= 12 ? "priority" : "standard";
     return {
       id: docSnap.id,
       name: String(d.name ?? ""),
       phone: String(d.phone ?? ""),
       pendingCommissionInr: Number(d.pendingCommissionInr ?? 0),
       bookingBlockOverride: Boolean(d.bookingBlockOverride),
+      ownerRevenueSharePercent: percent,
+      ownerPrivilegeTier: String(d.ownerPrivilegeTier ?? fallbackTier),
+      payoutStatus: payout ? String(payout.status ?? "verification_pending") : "not_configured",
+      payoutType: payout ? String(payout.type ?? "") : "",
+      payoutBankAccountMasked: payout ? String(payout.bankAccountMasked ?? "") : "",
+      payoutUpiVpaMasked: payout ? String(payout.upiVpaMasked ?? "") : "",
+      payoutAccountHolderName: payout ? String(payout.accountHolderName ?? "") : "",
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+export async function getOwnerPayoutAccountForAdmin(ownerId) {
+  if (!ownerId) throw new Error("ownerId is required.");
+  const result = await getOwnerPayoutAccount({ ownerId });
+  return result ?? null;
+}
+
+export async function saveOwnerPayoutAccountForAdmin(payload) {
+  return upsertOwnerPayoutAccount(payload || {});
+}
+
+export async function verifyOwnerPayoutBankForAdmin(ownerId) {
+  if (!ownerId) throw new Error("ownerId is required.");
+  return verifyOwnerPayoutBankAccount({ ownerId });
+}
+
+export async function saveOwnerPrivilegeTierForAdmin(ownerId, ownerPrivilegeTier) {
+  if (!ownerId) throw new Error("ownerId is required.");
+  if (!ownerPrivilegeTier) throw new Error("ownerPrivilegeTier is required.");
+  return updateOwnerPrivilegeTier({ ownerId, ownerPrivilegeTier });
+}
+
+export async function syncOwnerPrivilegeTiersNow() {
+  return syncOwnerPrivilegeTiersFromCommission();
 }

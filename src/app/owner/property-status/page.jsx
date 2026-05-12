@@ -81,6 +81,36 @@ export default function OwnerPropertyStatusPage() {
         }
     }
 
+    function propertyStatusMeta(status) {
+        const normalized = String(status ?? "").toLowerCase();
+        if (normalized === "pending_approval") {
+            return {
+                label: "Pending Approval",
+                badgeClass: "bg-amber-100 text-amber-700",
+                helpText: "Awaiting operator/superadmin approval before listing.",
+            };
+        }
+        if (normalized === "rejected") {
+            return {
+                label: "Rejected",
+                badgeClass: "bg-rose-100 text-rose-700",
+                helpText: "Rejected by operator/superadmin. Contact support after correcting details.",
+            };
+        }
+        if (normalized === "inactive") {
+            return {
+                label: "Inactive",
+                badgeClass: "bg-slate-100 text-slate-600",
+                helpText: "Temporarily hidden from consumer listings.",
+            };
+        }
+        return {
+            label: "Active",
+            badgeClass: "bg-emerald-100 text-emerald-700",
+            helpText: "Listed and visible to consumers.",
+        };
+    }
+
     async function handleToggleRoom(roomId, isActive) {
         setSaving(true);
         setError(null);
@@ -411,11 +441,25 @@ export default function OwnerPropertyStatusPage() {
                     <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         {properties.map((property) => (
                             <article key={property.id} className="rounded-xl border border-slate-200 bg-white p-4">
+                                {(() => {
+                                    const statusMeta = propertyStatusMeta(property.status);
+                                    const canToggle = property.status === "active" || property.status === "inactive";
+                                    return (
+                                        <>
                                 <p className="font-semibold text-slate-900">{property.name}</p>
                                 <p className="text-xs text-slate-500">{property.cityName || "Unknown city"}</p>
-                                <button type="button" onClick={() => void handleToggleProperty(property.id, property.status !== "inactive")} disabled={saving} className="mt-3 rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60">
-                                    {property.status === "inactive" ? "Enable" : "Disable"}
-                                </button>
+                                <span className={`mt-2 inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${statusMeta.badgeClass}`}>
+                                    {statusMeta.label}
+                                </span>
+                                <p className="mt-2 text-xs text-slate-500">{statusMeta.helpText}</p>
+                                {canToggle ? (
+                                    <button type="button" onClick={() => void handleToggleProperty(property.id, property.status !== "inactive")} disabled={saving} className="mt-3 rounded-full border border-amber-300 px-3 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-50 disabled:opacity-60">
+                                        {property.status === "inactive" ? "Enable" : "Disable"}
+                                    </button>
+                                ) : null}
+                                        </>
+                                    );
+                                })()}
                             </article>
                         ))}
                     </div>

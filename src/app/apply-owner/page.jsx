@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/auth-context";
-import { ProtectedRoute } from "@/components/auth/protected-route";
 import { getActiveCities } from "@/lib/firestore/consumer";
 import { submitOwnerApplication } from "@/lib/firestore/owner";
 import { useEffect } from "react";
@@ -37,6 +36,14 @@ export default function ApplyOwnerPage() {
       setForm((prev) => ({ ...prev, phone: profile.phoneNumber }));
     }
   }, [profile?.phoneNumber]);
+
+  useEffect(() => {
+    if (authLoading || user) {
+      return;
+    }
+    const next = encodeURIComponent("/apply-owner");
+    window.location.replace(`/login?next=${next}`);
+  }, [authLoading, router, user]);
 
   if (authLoading) {
     return (
@@ -119,8 +126,15 @@ export default function ApplyOwnerPage() {
     );
   }
 
+  if (!authLoading && !user) {
+    return (
+      <main className="mx-auto max-w-xl px-5 py-16 text-sm text-slate-500">
+        Redirecting to login...
+      </main>
+    );
+  }
+
   return (
-    <ProtectedRoute allowedRoles={["consumer"]}>
     <main className="mx-auto max-w-xl px-5 py-10 md:py-14">
       <section className="glass-card animate-rise rounded-2xl p-6 md:p-8">
         <h1 className="text-2xl font-bold text-slate-900">Apply as Bed Owner</h1>
@@ -222,6 +236,5 @@ export default function ApplyOwnerPage() {
         </form>
       </section>
     </main>
-    </ProtectedRoute>
   );
 }

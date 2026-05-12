@@ -1,5 +1,29 @@
 # Work Log
 
+## 2026-05-12
+
+### Completed
+- Removed unintended untracked folder `bed-booking-web` after preserving local env values into root `.env.local`.
+- Improved trust-forward consumer listing presentation with verified-listing, price-lock, and support cues.
+- Improved booking page trust/privacy copy with clear price-lock, checkout-rule, and optional Aadhaar messaging.
+- Improved login and profile completion UX copy to reduce friction and explain protected identity handling.
+- Improved operator and hidden superadmin role-console UX with explicit role-change confirmations and clearer status messaging.
+- Shipped owner new-property approval workflow: newly created properties are now `pending_approval`, operator/superadmin consoles include pending property approve/reject actions, and approval/rejection is processed through audited backend callables before listing activation.
+- Completed superadmin growth dashboard follow-ups: daily overview now includes city-level today bookings/revenue/active-bed rows and a top-performing-city ranking.
+- Added daily overview snapshot persistence into internal platform config so daily growth rows can survive page reloads.
+- Confirmed and retained superadmin global scarcity emergency-off switch behavior from platform settings.
+- Revalidated auth/routing matrix locally across consumer, owner, operator, and hidden superadmin paths using `?devAuth` role simulation and confirmed expected protected-route redirects.
+- Re-reviewed and aligned `docs/AUTH_TEST_CHECKLIST.md` with current role-route expectations.
+- Re-ran production guest protected-route checks on 2026-05-12 (`/consumer`, `/history`, `/profile`, `/apply-owner`, `/operator`, `/internal-control`) and fixed `/apply-owner` guest access so it now redirects to `/login?next=%2Fapply-owner` like the other protected routes.
+- Updated TODO checklist statuses for completed in-scope UX/trust/documentation items.
+- Added owner payout-account management backend (`upsertOwnerPayoutAccount`, `getOwnerPayoutAccount`) and superadmin UI controls for bank/UPI settlement setup.
+- Added bank-account verification callable (`verifyOwnerPayoutBankAccount`) with Razorpay fund-account verification attempt and audited fallback status handling.
+- Added owner privilege-tier backend (`updateOwnerPrivilegeTier`, `syncOwnerPrivilegeTiersFromCommission`) and superadmin role-console controls for tier set/sync.
+- Extended commission/role flows to auto-sync owner privilege tiers when owner commission changes.
+
+### Verification Notes
+- Production authenticated role validation remains blocked without active consumer/owner/operator/superadmin test sessions (and a completed consumer booking for rating verification).
+
 ## 2026-05-07
 
 ### Completed

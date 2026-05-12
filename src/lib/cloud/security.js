@@ -323,6 +323,56 @@ export async function setOwnerCommissionOverride(payload) {
   }
 }
 
+export async function getOwnerPayoutAccount(payload = {}) {
+  const callable = httpsCallable(functionsClient(), "getOwnerPayoutAccount");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not load owner payout account."));
+  }
+}
+
+export async function upsertOwnerPayoutAccount(payload = {}) {
+  const callable = httpsCallable(functionsClient(), "upsertOwnerPayoutAccount");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not save owner payout account."));
+  }
+}
+
+export async function verifyOwnerPayoutBankAccount(payload = {}) {
+  const callable = httpsCallable(functionsClient(), "verifyOwnerPayoutBankAccount");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not verify owner bank account."));
+  }
+}
+
+export async function updateOwnerPrivilegeTier(payload = {}) {
+  const callable = httpsCallable(functionsClient(), "updateOwnerPrivilegeTier");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not update owner privilege tier."));
+  }
+}
+
+export async function syncOwnerPrivilegeTiersFromCommission() {
+  const callable = httpsCallable(functionsClient(), "syncOwnerPrivilegeTiersFromCommission");
+  try {
+    const result = await callable({});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not sync owner privilege tiers."));
+  }
+}
+
 export async function setOwnerBookingBlock(payload) {
   const callable = httpsCallable(functionsClient(), "setOwnerBookingBlock");
   try {
@@ -330,5 +380,25 @@ export async function setOwnerBookingBlock(payload) {
     return result.data || null;
   } catch (error) {
     throw new Error(toMessage(error, "Could not update owner booking block."));
+  }
+}
+
+export async function approveOwnerProperty(payload) {
+  const callable = httpsCallable(functionsClient(), "approveOwnerProperty");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not approve property."));
+  }
+}
+
+export async function rejectOwnerProperty(payload) {
+  const callable = httpsCallable(functionsClient(), "rejectOwnerProperty");
+  try {
+    const result = await callable(payload || {});
+    return result.data || null;
+  } catch (error) {
+    throw new Error(toMessage(error, "Could not reject property."));
   }
 }

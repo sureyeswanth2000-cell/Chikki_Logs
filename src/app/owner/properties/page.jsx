@@ -80,7 +80,7 @@ export default function OwnerPropertiesPage() {
                 nearRailwayKm: "",
                 nearBusKm: "",
             });
-            setNotice("Property created successfully.");
+            setNotice("Property submitted for operator/superadmin approval. It will become active after approval.");
         } catch (err) {
             setError(err instanceof Error ? err.message : "Could not create property.");
         } finally {

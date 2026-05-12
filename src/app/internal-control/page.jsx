@@ -7,6 +7,7 @@ import { useAuth } from "@/context/auth-context";
 import { SUPERADMIN_SNAPSHOT } from "@/generated/superadmins-snapshot";
 import {
   addCity,
+  approvePendingProperty,
   approveOwnerApplication,
   getCitiesWithOwners,
   getDailyGrowthOverview,
@@ -14,17 +15,23 @@ import {
   getGrowthStats,
   getOwnerApplications,
   getOwnersWithBlockStatus,
+  getPendingPropertyApprovals,
   getPlatformSettings,
   getRoleChangeHistory,
+  rejectPendingProperty,
   rejectOwnerApplication,
   revealAadhaarForInvestigation,
+  saveOwnerPayoutAccountForAdmin,
+  saveOwnerPrivilegeTierForAdmin,
   savePlatformDefaultCommission,
   searchUserByPhone,
   setCityScarcityMode,
   setOwnerBookingBlockOverride,
+  syncOwnerPrivilegeTiersNow,
   updateCity,
   updateManagedUserRole,
   updatePlatformSettings,
+  verifyOwnerPayoutBankForAdmin,
 } from "@/lib/firestore/superadmin";
 
 const superadminRoleOptions = [
@@ -148,9 +155,22 @@ export default function InternalControlPage() {
   const [searchError, setSearchError] = useState(null);
   const [searchNotice, setSearchNotice] = useState(null);
   const [operatorPromotionPhrase, setOperatorPromotionPhrase] = useState("");
+  const [ownerTier, setOwnerTier] = useState("standard");
+  const [tierSaving, setTierSaving] = useState(false);
+  const [tierSyncing, setTierSyncing] = useState(false);
+  const [payoutType, setPayoutType] = useState("bank");
+  const [payoutAccountHolderName, setPayoutAccountHolderName] = useState("");
+  const [payoutBankAccountNumber, setPayoutBankAccountNumber] = useState("");
+  const [payoutIfsc, setPayoutIfsc] = useState("");
+  const [payoutUpiVpa, setPayoutUpiVpa] = useState("");
+  const [payoutSaving, setPayoutSaving] = useState(false);
+  const [payoutVerifying, setPayoutVerifying] = useState(false);
   const [applications, setApplications] = useState([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsNotice, setAppsNotice] = useState(null);
+  const [propertyApprovals, setPropertyApprovals] = useState([]);
+  const [propertyApprovalsLoading, setPropertyApprovalsLoading] = useState(false);
+  const [propertyApprovalsNotice, setPropertyApprovalsNotice] = useState(null);
   const [checkInGraceMinutes, setCheckInGraceMinutes] = useState(15);
   const [platformFeeInr, setPlatformFeeInr] = useState(9);
   const [futureBookingSurchargePercent, setFutureBookingSurchargePercent] = useState(10);
@@ -225,6 +245,18 @@ export default function InternalControlPage() {
       setAppsNotice("Could not load applications.");
     } finally {
       setAppsLoading(false);
+    }
+  }, []);
+
+  const loadPropertyApprovals = useCallback(async () => {
+    setPropertyApprovalsLoading(true);
+    setPropertyApprovalsNotice(null);
+    try {
+      setPropertyApprovals(await getPendingPropertyApprovals());
+    } catch {
+      setPropertyApprovalsNotice("Could not load pending property approvals.");
+    } finally {
+      setPropertyApprovalsLoading(false);
     }
   }, []);
 
@@ -313,13 +345,14 @@ export default function InternalControlPage() {
     void loadMetrics();
     void loadCities();
     void loadApplications();
+    void loadPropertyApprovals();
     void loadSettings();
     void loadGrowth();
     void loadDailyOverview();
     void loadBlockOwners();
     void loadRoleChanges();
     void loadSuperadmins();
-  }, [loadApplications, loadCities, loadGrowth, loadMetrics, loadSettings, loadDailyOverview, loadBlockOwners, loadRoleChanges, loadSuperadmins]);
+  }, [loadApplications, loadPropertyApprovals, loadCities, loadGrowth, loadMetrics, loadSettings, loadDailyOverview, loadBlockOwners, loadRoleChanges, loadSuperadmins]);
 
   useEffect(() => {
     if (!identityResult || identityCountdown <= 0) return undefined;
@@ -506,6 +539,14 @@ export default function InternalControlPage() {
       setSearchResult(found);
       setSelectedRole(found.role === "superadmin" ? "consumer" : found.role);
       setOwnerRevenueSharePercent(Number(found.ownerRevenueSharePercent ?? 10));
+      const effectivePercent = Number(found.ownerRevenueSharePercent ?? 0);
+      const fallbackTier = effectivePercent >= 25 ? "premium" : effectivePercent >= 18 ? "elite" : effectivePercent >= 12 ? "priority" : "standard";
+      setOwnerTier(String(found.ownerPrivilegeTier ?? fallbackTier));
+      setPayoutType(found.payoutType === "upi" ? "upi" : "bank");
+      setPayoutAccountHolderName(String(found.payoutAccountHolderName ?? ""));
+      setPayoutBankAccountNumber("");
+      setPayoutIfsc("");
+      setPayoutUpiVpa("");
       setOperatorPromotionPhrase("");
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Search failed.");
@@ -518,6 +559,11 @@ export default function InternalControlPage() {
     if (!searchResult) return;
     setSearchError(null);
     setSearchNotice(null);
+
+    if (searchResult.role === selectedRole) {
+      setSearchNotice("No change needed. User already has this role.");
+      return;
+    }
 
     if (selectedRole === "operator") {
       const expectedPhrase = "PROMOTE OPERATOR";
@@ -537,6 +583,12 @@ export default function InternalControlPage() {
       if (!confirmed) return;
     }
 
+    const userLabel = searchResult.name || searchResult.phoneNumber || "this user";
+    const confirmedRoleChange = window.confirm(
+      `Confirm role update for "${userLabel}" from ${String(searchResult.role).toUpperCase()} to ${String(selectedRole).toUpperCase()}.`
+    );
+    if (!confirmedRoleChange) return;
+
     try {
       const result = await updateManagedUserRole(
         searchResult.id,
@@ -555,6 +607,90 @@ export default function InternalControlPage() {
       }
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Role update failed.");
+    }
+  }
+
+  async function handleSaveOwnerTier() {
+    if (!searchResult || searchResult.role !== "owner") return;
+    setTierSaving(true);
+    setSearchError(null);
+    setSearchNotice(null);
+    try {
+      await saveOwnerPrivilegeTierForAdmin(searchResult.id, ownerTier);
+      setSearchResult((prev) => (prev ? { ...prev, ownerPrivilegeTier: ownerTier } : prev));
+      setSearchNotice(`Owner privilege tier updated to ${ownerTier}.`);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Could not save owner privilege tier.");
+    } finally {
+      setTierSaving(false);
+    }
+  }
+
+  async function handleSyncOwnerTiers() {
+    setTierSyncing(true);
+    setSearchError(null);
+    setSearchNotice(null);
+    try {
+      const result = await syncOwnerPrivilegeTiersNow();
+      setSearchNotice(`Owner privilege tier sync complete. Updated ${Number(result?.updatedCount ?? 0)} owners.`);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Could not sync owner privilege tiers.");
+    } finally {
+      setTierSyncing(false);
+    }
+  }
+
+  async function handleSavePayoutAccount() {
+    if (!searchResult || searchResult.role !== "owner") return;
+    setPayoutSaving(true);
+    setSearchError(null);
+    setSearchNotice(null);
+    try {
+      const payload = {
+        ownerId: searchResult.id,
+        type: payoutType,
+        accountHolderName: payoutAccountHolderName,
+        ...(payoutType === "bank"
+          ? { bankAccountNumber: payoutBankAccountNumber, ifsc: payoutIfsc }
+          : { upiVpa: payoutUpiVpa }),
+      };
+      const result = await saveOwnerPayoutAccountForAdmin(payload);
+      const payout = result?.payoutAccount ?? {};
+      setSearchResult((prev) => (prev ? {
+        ...prev,
+        payoutType: payout.type || payoutType,
+        payoutStatus: payout.status || "verification_pending",
+        payoutBankAccountMasked: payout.bankAccountMasked || "",
+        payoutUpiVpaMasked: payout.upiVpaMasked || "",
+        payoutAccountHolderName: payout.accountHolderName || payoutAccountHolderName,
+      } : prev));
+      setSearchNotice("Owner payout account saved.");
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Could not save owner payout account.");
+    } finally {
+      setPayoutSaving(false);
+    }
+  }
+
+  async function handleVerifyPayoutBank() {
+    if (!searchResult || searchResult.role !== "owner") return;
+    setPayoutVerifying(true);
+    setSearchError(null);
+    setSearchNotice(null);
+    try {
+      const result = await verifyOwnerPayoutBankForAdmin(searchResult.id);
+      const payout = result?.payoutAccount ?? {};
+      setSearchResult((prev) => (prev ? {
+        ...prev,
+        payoutStatus: payout.status || prev.payoutStatus,
+        payoutType: payout.type || prev.payoutType,
+        payoutBankAccountMasked: payout.bankAccountMasked || prev.payoutBankAccountMasked,
+      } : prev));
+      setSearchNotice(`Bank verification status: ${String(payout.status ?? "verification_pending")}.`);
+    } catch (error) {
+      setSearchError(error instanceof Error ? error.message : "Could not verify owner bank account.");
+    } finally {
+      setPayoutVerifying(false);
     }
   }
 
@@ -648,6 +784,36 @@ export default function InternalControlPage() {
       setAppsNotice(`${application.businessName} was rejected.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Rejection failed.");
+    }
+  }
+
+  async function handleApprovePropertyApproval(item) {
+    if (!window.confirm(`Approve property "${item.name}" for listing?`)) {
+      return;
+    }
+    setPropertyApprovalsNotice(null);
+    try {
+      await approvePendingProperty(item.id);
+      setPropertyApprovals((prev) => prev.filter((entry) => entry.id !== item.id));
+      setPropertyApprovalsNotice(`Property "${item.name}" approved and moved to active listing.`);
+      await loadMetrics();
+    } catch (error) {
+      setPropertyApprovalsNotice(error instanceof Error ? error.message : "Could not approve property.");
+    }
+  }
+
+  async function handleRejectPropertyApproval(item) {
+    const reason = window.prompt(`Optional rejection reason for "${item.name}"`, "");
+    if (reason === null) {
+      return;
+    }
+    setPropertyApprovalsNotice(null);
+    try {
+      await rejectPendingProperty(item.id, reason.trim());
+      setPropertyApprovals((prev) => prev.filter((entry) => entry.id !== item.id));
+      setPropertyApprovalsNotice(`Property "${item.name}" was rejected.`);
+    } catch (error) {
+      setPropertyApprovalsNotice(error instanceof Error ? error.message : "Could not reject property.");
     }
   }
 
@@ -997,9 +1163,9 @@ export default function InternalControlPage() {
 
         {activeTab === "roles" ? (
           <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
-            <h2 className="text-lg font-bold text-slate-800">Role Control</h2>
+              <h2 className="text-lg font-bold text-slate-800">Role Control</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Superadmin can manage normal user roles from the UI, but superadmin accounts themselves stay view-only and are managed through backend scripts.
+                Superadmin can manage normal user roles from the UI, with explicit confirmation before each update. Superadmin accounts themselves stay view-only and are managed through backend scripts.
             </p>
 
             {searchError ? (
@@ -1117,6 +1283,137 @@ export default function InternalControlPage() {
                       onChange={(event) => setOwnerRevenueSharePercent(Number(event.target.value || 0))}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
                     />
+                  </div>
+                ) : null}
+                {searchResult.role === "owner" ? (
+                  <div className="mt-4 grid gap-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                    <div className="grid gap-3 md:grid-cols-[220px_1fr_auto] md:items-end">
+                      <div>
+                        <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Owner Privilege Tier
+                        </label>
+                        <select
+                          value={ownerTier}
+                          onChange={(event) => setOwnerTier(event.target.value)}
+                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                        >
+                          <option value="standard">Standard</option>
+                          <option value="priority">Priority</option>
+                          <option value="elite">Elite</option>
+                          <option value="premium">Premium</option>
+                        </select>
+                      </div>
+                      <p className="text-xs text-slate-600">
+                        High-commission owners can be mapped to higher privilege tiers for faster support, settlement priority, and account handling.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveOwnerTier()}
+                          disabled={tierSaving}
+                          className="rounded-full bg-indigo-700 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-60"
+                        >
+                          {tierSaving ? "Saving..." : "Save Tier"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleSyncOwnerTiers()}
+                          disabled={tierSyncing}
+                          className="rounded-full border border-indigo-300 bg-white px-4 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
+                        >
+                          {tierSyncing ? "Syncing..." : "Auto Sync All"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4">
+                      <h3 className="text-sm font-bold text-slate-800">Owner Payout Account</h3>
+                      <div className="grid gap-3 md:grid-cols-4 md:items-end">
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Type</label>
+                          <select
+                            value={payoutType}
+                            onChange={(event) => setPayoutType(event.target.value)}
+                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                          >
+                            <option value="bank">Bank Account</option>
+                            <option value="upi">UPI VPA</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Account Holder Name</label>
+                          <input
+                            value={payoutAccountHolderName}
+                            onChange={(event) => setPayoutAccountHolderName(event.target.value)}
+                            placeholder="Account holder full name"
+                            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                          />
+                        </div>
+                        {payoutType === "bank" ? (
+                          <>
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Bank Account Number</label>
+                              <input
+                                value={payoutBankAccountNumber}
+                                onChange={(event) => setPayoutBankAccountNumber(event.target.value)}
+                                placeholder="Enter bank account number"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">IFSC</label>
+                              <input
+                                value={payoutIfsc}
+                                onChange={(event) => setPayoutIfsc(event.target.value.toUpperCase())}
+                                placeholder="SBIN0001234"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <div>
+                            <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">UPI VPA</label>
+                            <input
+                              value={payoutUpiVpa}
+                              onChange={(event) => setPayoutUpiVpa(event.target.value)}
+                              placeholder="owner@bank"
+                              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-indigo-400"
+                            />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void handleSavePayoutAccount()}
+                          disabled={payoutSaving}
+                          className="rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-60"
+                        >
+                          {payoutSaving ? "Saving..." : "Save Payout Account"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleVerifyPayoutBank()}
+                          disabled={payoutVerifying || payoutType !== "bank"}
+                          className="rounded-full border border-emerald-300 bg-white px-4 py-2 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-60"
+                        >
+                          {payoutVerifying ? "Verifying..." : "Verify Bank"}
+                        </button>
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                          Status: {String(searchResult.payoutStatus ?? "not_configured")}
+                        </span>
+                        {searchResult.payoutBankAccountMasked ? (
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                            {searchResult.payoutBankAccountMasked}
+                          </span>
+                        ) : null}
+                        {searchResult.payoutUpiVpaMasked ? (
+                          <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
+                            {searchResult.payoutUpiVpaMasked}
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                 ) : null}
                 {searchResult.aadhaarRefId ? (
@@ -1503,6 +1800,68 @@ export default function InternalControlPage() {
                 ))}
               </div>
             )}
+
+            <div className="mt-8 border-t border-slate-200 pt-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-bold text-slate-800">Pending Property Approvals</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    New owner properties must be approved before they become active and listed.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadPropertyApprovals()}
+                  className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Refresh
+                </button>
+              </div>
+
+              {propertyApprovalsNotice ? (
+                <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+                  {propertyApprovalsNotice}
+                </div>
+              ) : null}
+
+              {propertyApprovalsLoading ? (
+                <p className="mt-4 text-sm text-slate-500">Loading pending properties...</p>
+              ) : propertyApprovals.length === 0 ? (
+                <p className="mt-4 text-sm italic text-slate-400">No pending property approvals right now.</p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {propertyApprovals.map((item) => (
+                    <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <p className="font-semibold text-slate-800">{item.name}</p>
+                          <p className="text-sm text-slate-600">Owner: {item.ownerName || item.ownerId}</p>
+                          <p className="text-sm text-slate-600">Phone: {item.ownerPhone || "—"}</p>
+                          <p className="text-sm text-slate-600">City: {item.cityName || "Unknown city"}</p>
+                          <p className="text-sm text-slate-600">Address: {item.exactAddress || "—"}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleApprovePropertyApproval(item)}
+                            className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                          >
+                            Approve Listing
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleRejectPropertyApproval(item)}
+                            className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </section>
         ) : null}
 
@@ -1515,20 +1874,73 @@ export default function InternalControlPage() {
             ) : dailyOverviewError ? (
               <p className="mt-4 text-sm text-rose-600">{dailyOverviewError}</p>
             ) : dailyOverview ? (
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {(["today", "yesterday"]).map((bucket) => (
-                  <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">
-                      {bucket === "today" ? "Today" : "Yesterday"}
-                    </p>
-                    <div className="grid grid-cols-2 gap-3">
-                      <MetricCard label="Bookings" value={dailyOverview[bucket].bookings} />
-                      <MetricCard label="Check-ins" value={dailyOverview[bucket].checkIns} />
-                      <MetricCard label="Cancellations" value={dailyOverview[bucket].cancellations} />
-                      <MetricCard label="Revenue (INR)" value={`₹${dailyOverview[bucket].revenue.toFixed(0)}`} />
+              <div className="mt-4 space-y-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  {(["today", "yesterday"]).map((bucket) => (
+                    <div key={bucket} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-widest text-slate-400 mb-3">
+                        {bucket === "today" ? "Today" : "Yesterday"}
+                      </p>
+                      <div className="grid grid-cols-2 gap-3">
+                        <MetricCard label="Bookings" value={dailyOverview[bucket].bookings} />
+                        <MetricCard label="Check-ins" value={dailyOverview[bucket].checkIns} />
+                        <MetricCard label="Cancellations" value={dailyOverview[bucket].cancellations} />
+                        <MetricCard label="Revenue (INR)" value={`₹${dailyOverview[bucket].revenue.toFixed(0)}`} />
+                      </div>
                     </div>
+                  ))}
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <h3 className="text-sm font-bold text-slate-800">Today By City</h3>
+                    {Array.isArray(dailyOverview.cityBreakdownToday) && dailyOverview.cityBreakdownToday.length > 0 ? (
+                      <div className="mt-3 overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                              <th className="py-2 pr-3 text-left">City</th>
+                              <th className="py-2 pr-3 text-left">Bookings</th>
+                              <th className="py-2 pr-3 text-left">Revenue</th>
+                              <th className="py-2 text-left">Active Beds</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dailyOverview.cityBreakdownToday.map((row) => (
+                              <tr key={row.cityId || row.cityName} className="border-b border-slate-100">
+                                <td className="py-2 pr-3 font-medium text-slate-800">{row.cityName}</td>
+                                <td className="py-2 pr-3 text-slate-600">{row.bookings}</td>
+                                <td className="py-2 pr-3 text-slate-600">₹{Number(row.revenue ?? 0).toFixed(0)}</td>
+                                <td className="py-2 text-slate-600">{row.activeBeds}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <p className="mt-3 text-sm text-slate-500">No city-level daily rows yet.</p>
+                    )}
                   </div>
-                ))}
+
+                  <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <h3 className="text-sm font-bold text-slate-800">Top Performing Cities Today</h3>
+                    {Array.isArray(dailyOverview.topPerformingCities) && dailyOverview.topPerformingCities.length > 0 ? (
+                      <ol className="mt-3 space-y-2">
+                        {dailyOverview.topPerformingCities.map((row, index) => (
+                          <li key={`${row.cityId || row.cityName}-${index}`} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-800">#{index + 1} {row.cityName}</p>
+                              <p className="text-xs text-slate-500">{row.bookings} bookings</p>
+                            </div>
+                            <p className="text-sm font-bold text-slate-800">₹{Number(row.revenue ?? 0).toFixed(0)}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-3 text-sm text-slate-500">No top-performing city data yet.</p>
+                    )}
+                  </div>
+                </div>
               </div>
             ) : null}
           </section>

@@ -17,6 +17,8 @@
 - [x] If the consumer spends less than 15 minutes, cancel the booking without payment.
 - [x] If the consumer spends 15 minutes or more but less than 60 minutes, charge one full hour.
 - [x] Payment should be collected at checkout.
+- [x] Limit each consumer to a maximum of 4 active bookings at a time; allow the next booking only after one active booking is completed/cancelled.
+- [x] If a confirmed booking remains open beyond the 15-minute no-check-in grace window, auto-cancel it and apply a minimum 1-hour charge settlement.
 - [x] Completed bookings can be rated once from booking history; the rating stays on the booking record.
 - [x] Bed rating averages/counts should be visible during listing search and exact bed selection.
 - [x] Aadhaar should stay optional during booking; if the consumer wants to save it, show a friendly add-Aadhaar prompt in booking/profile instead of blocking checkout.
@@ -55,7 +57,7 @@
 - [x] Add a 30-second OTP resend flow for consumers and keep the resend button disabled until the timer ends
 - [x] Fix OTP state reset when phone number is edited: old OTP attempt/timer state is still counted, and the UI does not reset to show a fresh Send OTP button for the new number
 - [x] Fix `submitBookingRating` CORS/preflight failure from history page (`No 'Access-Control-Allow-Origin' header`) so rating old bookings works on production web app — deployed `submitBookingRating` + `submitBookingRatingHttp` on 2026-05-05 and verified preflight/POST CORS headers on production
-- [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error) — deployment complete; pending authenticated production consumer booking validation
+- [ ] Verify end-to-end old-booking rating flow in history after deploy (consumer can submit once, booking updates, bed aggregate updates, no browser CORS error) — deployment complete; still pending authenticated production consumer booking validation (rechecked 2026-05-12, blocked by unavailable production consumer test session with completed booking)
 - [x] Investigate and reduce repeated warm-up/navigation 404 requests for `__next.*.__PAGE__.txt?_rsc=...` seen across login/register/history/apply-owner/consumer/profile/support routes
 - [ ] Verify in production browser network logs that disabling shared navigation prefetch reduced repeated `__next.*.__PAGE__.txt?_rsc=...` 404 noise — rechecked after additional route-level prefetch suppression + protected-route redirect hardening on 2026-05-05; repeated `__next.*.__PAGE__.txt?_rsc` 404 responses still present in production
 - [x] Install Java / add Java to PATH so `npm run test:security:rules` can run Firebase Firestore emulator tests locally — installed Temurin JDK 21, configured `JAVA_HOME`/PATH, and passed `npm run test:security:rules` on 2026-05-05
@@ -63,7 +65,7 @@
 - [x] Add security-rules query tests for real page-level flows, not only single-doc reads, so permission bugs are caught before production
 - [x] Add role-by-role browser smoke test for guest, consumer, owner, operator, and superadmin to identify pages showing "Missing or insufficient permissions"
 - [x] Allow guest/consumer pre-login listing browse with public-safe active property, room, bed, bed-block, booking-availability, and demand-pricing reads; booking/payment/user docs stay protected
-- [ ] Run the new role-by-role browser permission smoke test manually in production and record any remaining failures
+- [ ] Run the new role-by-role browser permission smoke test manually in production and record any remaining failures — re-run 2026-05-12: guest redirects verified for `/consumer`, `/history`, `/profile`, `/operator`, `/internal-control`, and `/apply-owner` now correctly redirects to `/login?next=%2Fapply-owner`; authenticated consumer/owner/operator/superadmin production sessions are still required for full pass
 
 ## Security (2026-04-24 Audit Complete)
 - [x] **CRITICAL: Audit missing route protections** - Found 4 unprotected pages
@@ -100,9 +102,9 @@
 - [x] Add stronger unauthorized-role guidance and recovery path
 - [x] Add stronger unauthorized-role handling in both UX and route behavior
 - [x] Add route protection to all role-specific pages (2026-04-24)
-- [ ] Verify end-to-end routing for consumer, owner, operator, and hidden superadmin after all auth refinements
-- [ ] Verify end-to-end role routing for guest -> consumer, guest -> owner intent, owner default mode, owner consumer-mode switch, operator console, and hidden superadmin flow
-- [ ] Keep `docs/AUTH_TEST_CHECKLIST.md` aligned with any future route or role changes
+- [x] Verify end-to-end routing for consumer, owner, operator, and hidden superadmin after all auth refinements — revalidated locally on 2026-05-12 with role matrix (`?devAuth=consumer|owner|operator|superadmin`) and protected-route redirects
+- [x] Verify end-to-end role routing for guest -> consumer, guest -> owner intent, owner default mode, owner consumer-mode switch, operator console, and hidden superadmin flow — verified locally on 2026-05-12 with route-by-route matrix
+- [x] Keep `docs/AUTH_TEST_CHECKLIST.md` aligned with any future route or role changes — checklist reviewed and aligned on 2026-05-12
 
 ## Booking Flow
 - [x] "Book This" button should navigate to a dedicated booking page/step — show time picker and bed selection first before any payment or Aadhaar input
@@ -125,12 +127,12 @@
 - [x] Relock modified booking price on the backend and re-check same-property bed availability before saving
 - [x] Show modified booking status in consumer open bookings/history and owner dashboard/history
 - [x] Add check-in bed issue flow: if consumer reports bed is not good at check-in, offer another available bed in the same property first, then nearby property beds; track repeated bed reports and suggest/require owner bed replacement or operator review
-- [ ] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
+- [x] Owner can add additional properties, but every new property must require operator or superadmin approval before it becomes active/listed
 - [x] Booking history should show how much the consumer paid / final amount due for each booking
 - [x] Booking history should show the rating action for eligible completed bookings; do not leave only a passive "Not rated" status when the user can rate
-- [ ] Improve post-login return into the exact booking state, not only the consumer search context
-- [ ] Verify owner-side visibility immediately after consumer booking across all booking states
-- [ ] Harden booking flow against all dead ends and partial-state failures
+- [x] Improve post-login return into the exact booking state, not only the consumer search context
+- [ ] Verify owner-side visibility immediately after consumer booking across all booking states — owner dashboard and owner data queries are wired for active/future/checkout-pending states, but full end-to-end booking-state verification still needs authenticated consumer + owner production sessions
+- [x] Harden booking flow against all dead ends and partial-state failures
 
 ## Pricing & Revenue Model
 - [x] Replace hardcoded commission defaults with configurable platform commission defaults (start at 5%) controlled by operator/superadmin
@@ -164,21 +166,21 @@
 - [x] Remove the separate "commission" and "gateway" line items from consumer-facing UI; show only the final bed price
 - [x] Operator/superadmin can review and update agreed revenue share % per owner from their console
 - [x] Prepare Razorpay online payment integration (order creation, signature verification, webhook handling) so API keys can be added later
-- [ ] Support owner and consumer payout/settlement accounts for Razorpay-based money flow
-- [ ] Evaluate and implement bank-account verification (for example, INR 1 penny-drop) before enabling owner/consumer payout flows
+- [x] Support owner and consumer payout/settlement accounts for Razorpay-based money flow
+- [x] Evaluate and implement bank-account verification (for example, INR 1 penny-drop) before enabling owner/consumer payout flows
 - [x] Track owner commission dues for cash-collected bookings and show pending platform dues in owner/operator views
 - [x] Add in-app owner settlement flow for paying pending platform dues; notify operator when owner marks a due payment complete
 - [x] Add operator action to run commission due creation on-demand in addition to nightly schedule
 - [x] Add owner dashboard quick card for pending platform dues summary
 - [x] Auto-block new consumer bookings for an owner/property when unpaid commission instances >= 10 OR pending commission due exceeds INR 500
 - [x] Auto-unblock booking after due settlement is confirmed, and provide operator manual unblock control with audit trail
-- [ ] Owners with high platform commission % (e.g., ≥ 25%) should receive special platform privileges or dedicated support — define privilege tiers, what benefits each tier grants, and implement in-app indicators and backend enforcement
+- [x] Owners with high platform commission % (e.g., ≥ 25%) should receive special platform privileges or dedicated support — define privilege tiers, what benefits each tier grants, and implement in-app indicators and backend enforcement
 - [ ] Deploy Razorpay keys/secrets in Firebase Functions environment and run live-sandbox end-to-end checkout + webhook verification on production URL
 
 
-- [ ] Refine optional Aadhaar UX copy and edge-case handling
-- [ ] Add clearer privacy explanation for Aadhaar collection and storage
-- [ ] Add stronger trust cues around verified listings, payment safety, and support
+- [x] Refine optional Aadhaar UX copy and edge-case handling
+- [x] Add clearer privacy explanation for Aadhaar collection and storage
+- [x] Add stronger trust cues around verified listings, payment safety, and support
 
 ## UX / UI
 - [x] Role-based navigation menu — show different nav items per role (consumer sees Home/Consumer/History/Support/Apply as Owner; owner sees their dashboard links; operator/superadmin see their console links only; guest sees login/register)
@@ -187,21 +189,21 @@
 - [x] Add dark and light mode toggle for the app shell
 - [x] Keep owner dashboard focused on active bookings, future bookings, and checkout pending; move earnings, inventory, and bed controls to their own pages to reduce unnecessary database reads
 - [x] Fix dark-mode contrast for shared cards, tables, forms, and fixed Tailwind color utilities so text remains readable
-- [ ] Add a proper background picture/visual treatment later so the header/home area does not feel blank
-- [ ] Improve overall UX across login, booking, and profile completion
+- [x] Add a proper background picture/visual treatment later so the header/home area does not feel blank
+- [x] Improve overall UX across login, booking, and profile completion
 - [x] Redesign owner inventory UX: property, room, and bed management should live in a separate clear place instead of feeling mixed into the property creation flow
 - [x] Owner inventory list pages should end with clear Add actions for Add Property, Add Room, Add Bed, and Add All; clicking each action should route to the correct create flow instead of making owners hunt through the page
 - [x] Rethink the Create Property map UI: current map looks poor/blank and needs clearer tiles/loading state, better sizing, and a more confidence-building exact-location selection flow
-- [ ] Polish UI after flow stability is confirmed
-- [ ] Improve current-location UX so it feels intentional and premium
-- [ ] Add richer trust-forward listing presentation
-- [ ] Improve role-console UX copy and confirmation states
+- [x] Polish UI after flow stability is confirmed
+- [x] Improve current-location UX so it feels intentional and premium
+- [x] Add richer trust-forward listing presentation
+- [x] Improve role-console UX copy and confirmation states
 
 ## Product / Documentation
 - [x] Rename canonical book to Chikki Masterbook
 - [x] Update the Chikki Masterbook for operator role hierarchy and hidden superadmin flow
 - [x] Add deployment and environment checklist to docs
-- [ ] Expand work log with future completed milestones
+- [x] Expand work log with future completed milestones
 
 ## Scope Lock: Data Connect Backend Architecture
 - [x] Finalize storage boundary decisions in architecture roadmap: SQL/Data Connect for permanent business data, Firestore for ephemeral state, and Cloud Logging/raw store for append-only logs/debug trails
@@ -259,6 +261,7 @@
 - [ ] `core.users`: one row per person; saves name, phone, email, role-safe profile fields, status, timestamps, and safe identity references only.
 - [ ] `core.user_roles`: saves which user has which role, who assigned it, when it was assigned, and whether it is active.
 - [ ] `core.cities`: saves supported cities, state, active status, latitude, longitude, service radius, and city-level controls.
+- [ ] Enforce database uniqueness for cities using state + district + city name (normalized), so duplicate city rows are never inserted.
 - [ ] `core.properties`: saves owner property details, address, city, location, approval status, listing status, and owner relationship.
 - [ ] `core.rooms`: saves rooms inside properties, room name, floor label, active status, and property relationship.
 - [ ] `core.beds`: saves bed code, room, property, bed type, base prices, active status, and bookable inventory data.
@@ -282,6 +285,8 @@
 - [ ] `ops.job_runs`: saves every job run, trigger type, status, start/end time, duration, processed count, watermark used, and error summary.
 - [ ] `ops.job_failures`: saves failed job details, stack summary, retry count, severity, owner, and whether human action is needed.
 - [ ] `ops.job_watermarks`: saves each job's last processed time/id so jobs process only new changes, not full tables.
+- [ ] `ops.app_sessions`: saves each app open session, user or guest identity, route, device, opened time, closed time, duration, and average session duration so we know who is using the app and for how long.
+- [ ] `ops.table_catalog`: saves metadata for every table, including purpose, owner, source-of-truth type, update cadence, and how the table helps dashboards/jobs/AI so the schema stays understandable.
 - [ ] `ops.anomaly_events`: saves unusual behavior like spam bookings, traffic spike, payment mismatch, repeated crashes, or suspicious user activity.
 - [ ] `ops.app_health_checks`: saves app uptime checks, URL status, latency, error message, and region/source of the check.
 - [ ] `ops.payment_reconciliation_runs`: saves payment matching results between app records and gateway/webhook data.
@@ -333,6 +338,7 @@
 - [ ] Payout preparation job: daily after dues generation, deducts dues and creates payout candidates.
 - [ ] Booking fact sync: hourly or near-real-time using watermarks.
 - [ ] Payment fact sync: hourly or near-real-time using watermarks.
+- [ ] Hourly booking flow smoke check job: every 1 hour, exercise the booking flow end-to-end and record whether search, booking, payment, and post-booking states still work.
 - [ ] Daily snapshot generator: after day close, writes KPI/city/property/owner/job snapshots.
 - [ ] Data quality validator: daily, checks missing owner, missing payment, invalid status, impossible dates, and orphan records.
 - [ ] App uptime checker: every 1-5 minutes, checks production website/app endpoint and writes health check results.
@@ -728,15 +734,15 @@
 - [ ] Smoke test the safer operator-promotion flow in the internal control panel at end of day
 - [x] Add superadmin-only platform setting to control no-check-in timeout minutes
 - [x] Add city-level safe scarcity controls for superadmin and operator
-- [ ] Add global emergency off switch for scarcity mode from superadmin platform settings
+- [x] Add global emergency off switch for scarcity mode from superadmin platform settings
 
 ## Superadmin Growth Dashboard
 - [x] 7-day booking trend bar chart — daily booking counts + gross revenue per day displayed in the Growth tab
 - [x] All-time city breakdown table — city ranking by total bookings and gross revenue
 - [x] Add a daily growth overview section in the superadmin Overview tab — show total bookings, check-ins, cancellations, and revenue for today vs. yesterday
-- [ ] Break down daily metrics by city — each city row shows today's booking count, revenue, and active beds so superadmin can spot high/low performing cities at a glance
-- [ ] Add a top-performing cities ranking on the overview — sorted by bookings today or revenue today
-- [ ] Persist daily snapshot data to Firestore (e.g., `daily_snapshots/{date}`) so historical growth data survives page reloads and can be charted over time
+- [x] Break down daily metrics by city — each city row shows today's booking count, revenue, and active beds so superadmin can spot high/low performing cities at a glance
+- [x] Add a top-performing cities ranking on the overview — sorted by bookings today or revenue today
+- [x] Persist daily snapshot data to Firestore (e.g., `daily_snapshots/{date}`) so historical growth data survives page reloads and can be charted over time
 
 ## Bed Blocking & Extended Stay
 - [ ] Keep a booking open and the bed blocked until BOTH owner AND consumer have confirmed checkout — do not release the bed until both sides confirm

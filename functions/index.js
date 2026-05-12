@@ -102,6 +102,7 @@ const MAX_PLATFORM_BOOKING_FEE_INR = 999;
 const DEFAULT_FUTURE_BOOKING_SURCHARGE_PERCENT = 10;
 const BOOK_NOW_MAX_ADVANCE_MS = 24 * 60 * 60 * 1000;
 const FUTURE_BOOKING_MAX_ADVANCE_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_ACTIVE_BOOKINGS_PER_USER = 4;
 const BED_ISSUE_REPORTS_COLLECTION = "bed_issue_reports";
 const BED_ISSUE_REVIEW_THRESHOLD = 3;
 const SCARCITY_MIN_BEDS = 1;
@@ -113,6 +114,7 @@ const DEMAND_OVERRIDES_COLLECTION = "demand_overrides";
 const DEMAND_WARNING_THRESHOLD_PERCENT = 60;
 const DEMAND_WATCHLIST_REFRESH_MINUTES = 15;
 const DEFAULT_DEMAND_GLOBAL_MAX_CAP_PERCENT = 100;
+const APP_HEALTH_CHECKS_COLLECTION = "app_health_checks";
 const DEFAULT_DEMAND_PROPERTY_THRESHOLDS = [
   { minOccupancyPercent: 90, multiplierPercent: 50 },
   { minOccupancyPercent: 70, multiplierPercent: 20 },
@@ -127,6 +129,10 @@ const MAX_PLATFORM_COMMISSION_PERCENT = 100;
 const DEFAULT_OWNER_REVENUE_SHARE_PERCENT = DEFAULT_PLATFORM_COMMISSION_PERCENT;
 const DEFAULT_GATEWAY_FEE_PERCENT = 2;
 const RAZORPAY_ORDER_ID_PREFIX = "chk";
+const OWNER_TIER_STANDARD = "standard";
+const OWNER_TIER_PRIORITY = "priority";
+const OWNER_TIER_ELITE = "elite";
+const OWNER_TIER_PREMIUM = "premium";
 
 function randomInt(min, max) {
   const safeMin = Math.ceil(Number(min));
@@ -226,6 +232,135 @@ function razorpayClient() {
   return new Razorpay({ key_id: keyId, key_secret: keySecret });
 }
 
+async function razorpayApiRequest({ method = "GET", path = "/", body = undefined }) {
+  const { keyId, keySecret } = razorpayConfig();
+  if (!keyId || !keySecret) {
+    throw new HttpsError("failed-precondition", "Razorpay is not configured. Missing RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET.");
+  }
+  const url = `https://api.razorpay.com/v1${path.startsWith("/") ? path : `/${path}`}`;
+  const auth = Buffer.from(`${keyId}:${keySecret}`).toString("base64");
+  const response = await fetch(url, {
+    method,
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof data?.error?.description === "string" && data.error.description
+      ? data.error.description
+      : `Razorpay API request failed with status ${response.status}.`;
+    throw new HttpsError("internal", detail);
+  }
+  return data;
+}
+
+function sanitizeIfsc(value) {
+  const normalized = String(value ?? "").trim().toUpperCase();
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(normalized)) {
+    throw new HttpsError("invalid-argument", "Invalid IFSC format.");
+  }
+  return normalized;
+}
+
+function sanitizeBankAccountNumber(value) {
+  const digits = String(value ?? "").replace(/\D+/g, "").trim();
+  if (!/^\d{6,18}$/.test(digits)) {
+    throw new HttpsError("invalid-argument", "Bank account number must be 6 to 18 digits.");
+  }
+  return digits;
+}
+
+function sanitizeUpiVpa(value) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (!/^[a-z0-9._\-]{2,}@[a-z][a-z0-9.\-]{1,}$/i.test(normalized)) {
+    throw new HttpsError("invalid-argument", "Invalid UPI VPA format.");
+  }
+  return normalized;
+}
+
+function maskBankAccount(accountNumber) {
+  const last4 = accountNumber.slice(-4);
+  return `XXXXXX${last4}`;
+}
+
+function maskUpiVpa(vpa) {
+  const [handle, domain] = String(vpa).split("@");
+  if (!handle || !domain) {
+    return "***";
+  }
+  if (handle.length <= 2) {
+    return `${handle[0] || "*"}***@${domain}`;
+  }
+  return `${handle.slice(0, 2)}***@${domain}`;
+}
+
+function ownerPrivilegeTierForCommission(percent) {
+  const safe = clampPlatformCommissionPercent(percent);
+  if (safe >= 25) return OWNER_TIER_PREMIUM;
+  if (safe >= 18) return OWNER_TIER_ELITE;
+  if (safe >= 12) return OWNER_TIER_PRIORITY;
+  return OWNER_TIER_STANDARD;
+}
+
+function normalizeOwnerTier(value) {
+  const tier = String(value ?? "").trim().toLowerCase();
+  const allowed = new Set([OWNER_TIER_STANDARD, OWNER_TIER_PRIORITY, OWNER_TIER_ELITE, OWNER_TIER_PREMIUM]);
+  if (!allowed.has(tier)) {
+    throw new HttpsError("invalid-argument", "Invalid owner tier. Use standard, priority, elite, or premium.");
+  }
+  return tier;
+}
+
+function payoutSummaryFromUserData(userData = {}) {
+  const payout = userData.payoutAccount && typeof userData.payoutAccount === "object"
+    ? userData.payoutAccount
+    : null;
+  if (!payout) {
+    return {
+      exists: false,
+      status: "not_configured",
+      type: null,
+      accountHolderName: "",
+      bankAccountMasked: "",
+      ifsc: "",
+      upiVpaMasked: "",
+      verificationSource: "",
+      verificationReferenceId: "",
+      updatedAt: null,
+      createdAt: null,
+    };
+  }
+  return {
+    exists: true,
+    status: String(payout.status ?? "verification_pending"),
+    type: String(payout.type ?? ""),
+    accountHolderName: String(payout.accountHolderName ?? ""),
+    bankAccountMasked: String(payout.bankAccountMasked ?? ""),
+    ifsc: String(payout.ifsc ?? ""),
+    upiVpaMasked: String(payout.upiVpaMasked ?? ""),
+    verificationSource: String(payout.verificationSource ?? ""),
+    verificationReferenceId: String(payout.verificationReferenceId ?? ""),
+    updatedAt: payout.updatedAt ?? null,
+    createdAt: payout.createdAt ?? null,
+  };
+}
+
+function ownerTierSummaryFromUserData(userData = {}) {
+  const commission = typeof userData.ownerRevenueSharePercent === "number"
+    ? clampPlatformCommissionPercent(userData.ownerRevenueSharePercent)
+    : DEFAULT_PLATFORM_COMMISSION_PERCENT;
+  const tier = String(userData.ownerPrivilegeTier ?? "").trim().toLowerCase() || ownerPrivilegeTierForCommission(commission);
+  return {
+    ownerRevenueSharePercent: commission,
+    ownerPrivilegeTier: tier,
+    ownerPrivilegeTierSource: String(userData.ownerPrivilegeTierSource ?? "auto"),
+    ownerPrivilegeTierUpdatedAt: userData.ownerPrivilegeTierUpdatedAt ?? null,
+  };
+}
+
 function razorpayPaymentSignature(orderId, paymentId) {
   const { keySecret } = razorpayConfig();
   if (!keySecret) {
@@ -257,6 +392,299 @@ function verifyRazorpayWebhookSignature(rawBody, signature) {
 function normalizeText(value, maxLen) {
   const text = String(value ?? "").trim();
   return text.length > maxLen ? text.slice(0, maxLen) : text;
+}
+
+const DEFAULT_PUBLIC_APP_URL = "https://chikki-logs-72607.web.app";
+const BOOKING_FLOW_SMOKE_TIMEOUT_MS = 12000;
+const DEFAULT_ALERT_EMAIL_SUBJECT_PREFIX = "[Chikki Ops]";
+const DEFAULT_ALERT_EMAIL_TO = "yeswanthsure97@gmail.com";
+
+function resolvePublicAppBaseUrl() {
+  const raw = String(
+    process.env.PUBLIC_APP_URL
+      ?? process.env.APP_BASE_URL
+      ?? process.env.SITE_URL
+      ?? process.env.FUNCTIONS_PUBLIC_URL
+      ?? DEFAULT_PUBLIC_APP_URL
+  ).trim();
+  return raw.replace(/\/+$/, "") || DEFAULT_PUBLIC_APP_URL;
+}
+
+function containsAny(text, needles) {
+  const haystack = String(text ?? "").toLowerCase();
+  return needles.some((needle) => haystack.includes(String(needle ?? "").toLowerCase()));
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = BOOKING_FLOW_SMOKE_TIMEOUT_MS) {
+  if (typeof fetch !== "function") {
+    throw new Error("Global fetch is not available in this runtime.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readResponseSummary(response, limit = 4000) {
+  const body = await response.text();
+  return {
+    status: response.status,
+    ok: response.ok,
+    url: response.url,
+    body,
+    bodySample: body.slice(0, limit),
+  };
+}
+
+function bookingSmokeAlertConfig() {
+  const apiKey = String(process.env.RESEND_API_KEY ?? "").trim();
+  const from = String(process.env.ALERT_EMAIL_FROM ?? process.env.SMOKE_ALERT_EMAIL_FROM ?? "").trim();
+  const toRaw = String(
+    process.env.ALERT_EMAIL_TO
+      ?? process.env.SMOKE_ALERT_EMAIL_TO
+      ?? DEFAULT_ALERT_EMAIL_TO
+  ).trim();
+  const to = toRaw
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const subjectPrefix = String(process.env.ALERT_EMAIL_SUBJECT_PREFIX ?? DEFAULT_ALERT_EMAIL_SUBJECT_PREFIX).trim() || DEFAULT_ALERT_EMAIL_SUBJECT_PREFIX;
+  return { apiKey, from, to, subjectPrefix };
+}
+
+async function sendBookingSmokeFailureEmail({ baseUrl, checks, failed, total, checkedAt }) {
+  const cfg = bookingSmokeAlertConfig();
+  if (!cfg.apiKey || !cfg.from || cfg.to.length === 0) {
+    return {
+      sent: false,
+      skipped: true,
+      reason: "Email alert config missing (RESEND_API_KEY, ALERT_EMAIL_FROM, ALERT_EMAIL_TO).",
+    };
+  }
+
+  const failedChecks = checks.filter((item) => item.result === "fail");
+  const checkLines = failedChecks
+    .slice(0, 8)
+    .map((item) => {
+      const status = Number.isFinite(Number(item.status)) ? `status=${item.status}` : "status=error";
+      const url = String(item.url ?? `${baseUrl}${item.path ?? ""}`).slice(0, 220);
+      const err = String(item.error ?? "").slice(0, 240);
+      return `- ${item.route || item.path || "unknown"} | ${status} | ${url}${err ? ` | error=${err}` : ""}`;
+    })
+    .join("\n");
+
+  const subject = `${cfg.subjectPrefix} Booking Flow Smoke FAILED (${failed}/${total})`;
+  const text = [
+    "Hourly booking flow smoke check reported failure.",
+    "",
+    `Checked at: ${checkedAt}`,
+    `Base URL: ${baseUrl}`,
+    `Failed: ${failed} / ${total}`,
+    "",
+    "Failed checks:",
+    checkLines || "- No detailed checks available",
+  ].join("\n");
+
+  const response = await fetchWithTimeout(
+    "https://api.resend.com/emails",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${cfg.apiKey}`,
+      },
+      body: JSON.stringify({
+        from: cfg.from,
+        to: cfg.to,
+        subject,
+        text,
+      }),
+    },
+    BOOKING_FLOW_SMOKE_TIMEOUT_MS,
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Resend email failed (${response.status}): ${body.slice(0, 400)}`);
+  }
+
+  return {
+    sent: true,
+    skipped: false,
+    recipients: cfg.to,
+  };
+}
+
+async function runBookingFlowSmokeCheckNow({
+  actorUserId = "system",
+  actorRole = "system",
+  trigger = "schedule",
+} = {}) {
+  const baseUrl = resolvePublicAppBaseUrl();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const routes = [
+    {
+      key: "home",
+      path: "/",
+      expectations: ["find beds", "start consumer booking", "chikki beds booking platform"],
+      mustContainAny: ["find beds", "start consumer booking", "booking platform"],
+    },
+    {
+      key: "booking",
+      path: "/booking/?cityId=smoke-city&propertyId=smoke-property&duration=hourly&bedFilter=all",
+      expectations: ["booking", "bed", "time"],
+      mustContainAny: ["booking", "bed", "choose"],
+    },
+    {
+      key: "consumer-protected",
+      path: "/consumer/",
+      expectations: ["login"],
+      mustRedirectTo: "/login",
+    },
+    {
+      key: "history-protected",
+      path: "/history/",
+      expectations: ["login"],
+      mustRedirectTo: "/login",
+    },
+    {
+      key: "profile-protected",
+      path: "/profile/",
+      expectations: ["login"],
+      mustRedirectTo: "/login",
+    },
+  ];
+
+  const checks = [];
+  let passed = 0;
+  let failed = 0;
+
+  for (const route of routes) {
+    const startedAtMs = Date.now();
+    try {
+      const response = await fetchWithTimeout(`${baseUrl}${route.path}`, { redirect: "follow" });
+      const summary = await readResponseSummary(response);
+      const bodyMatches = route.mustContainAny
+        ? containsAny(summary.bodySample, route.mustContainAny)
+        : containsAny(summary.bodySample, route.expectations || []);
+      const redirectedOk = route.mustRedirectTo
+        ? String(summary.url ?? "").includes(route.mustRedirectTo)
+        : true;
+      const ok = summary.ok && bodyMatches && redirectedOk && !containsAny(summary.bodySample, [
+        "missing or insufficient permissions",
+        "application error",
+        "unexpected error",
+        "failed to load",
+      ]);
+      checks.push({
+        ...summary,
+        route: route.key,
+        path: route.path,
+        expectedRedirect: route.mustRedirectTo || null,
+        matched: bodyMatches,
+        redirectedOk,
+        durationMs: Date.now() - startedAtMs,
+        result: ok ? "pass" : "fail",
+      });
+      if (ok) {
+        passed += 1;
+      } else {
+        failed += 1;
+      }
+    } catch (error) {
+      failed += 1;
+      checks.push({
+        route: route.key,
+        path: route.path,
+        result: "fail",
+        durationMs: Date.now() - startedAtMs,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  const ok = failed === 0;
+  let emailAlert = {
+    sent: false,
+    skipped: true,
+    reason: "not-required",
+  };
+
+  if (!ok) {
+    try {
+      emailAlert = await sendBookingSmokeFailureEmail({
+        baseUrl,
+        checks,
+        failed,
+        total: routes.length,
+        checkedAt: nowIso,
+      });
+    } catch (error) {
+      emailAlert = {
+        sent: false,
+        skipped: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  const record = {
+    checkType: "booking_flow_smoke",
+    ok,
+    status: ok ? "pass" : "warn",
+    baseUrl,
+    passed,
+    failed,
+    total: routes.length,
+    checkedAtMs: nowMs,
+    checkedAt: nowIso,
+    trigger,
+    actorUserId,
+    actorRole,
+    emailAlert,
+    checks,
+    updatedAt: FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
+  };
+
+  await db.collection(APP_HEALTH_CHECKS_COLLECTION).add(record);
+
+  await db.collection("audit_logs").add({
+    actorUserId,
+    actorRole,
+    action: ok ? "booking_flow_smoke_passed" : "booking_flow_smoke_warned",
+    entityType: "app_health",
+    entityId: "booking_flow_smoke",
+    metadata: {
+      baseUrl,
+      passed,
+      failed,
+      total: routes.length,
+      trigger,
+      status: ok ? "pass" : "warn",
+      emailAlert,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok,
+    status: ok ? "pass" : "warn",
+    baseUrl,
+    passed,
+    failed,
+    total: routes.length,
+    emailAlert,
+    checks,
+    checkedAt: nowIso,
+  };
 }
 
 function sanitizeAadhaar(value) {
@@ -1326,6 +1754,16 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     role: targetRole,
     updatedAt: FieldValue.serverTimestamp(),
   };
+  if (targetRole === "owner") {
+    const effectiveOwnerPercent = shouldUpdateOwnerRevenueShare
+      ? ownerRevenueSharePercent
+      : (typeof targetSnap.data()?.ownerRevenueSharePercent === "number"
+        ? clampPlatformCommissionPercent(targetSnap.data()?.ownerRevenueSharePercent)
+        : DEFAULT_PLATFORM_COMMISSION_PERCENT);
+    roleUpdate.ownerPrivilegeTier = ownerPrivilegeTierForCommission(effectiveOwnerPercent);
+    roleUpdate.ownerPrivilegeTierSource = "auto";
+    roleUpdate.ownerPrivilegeTierUpdatedAt = FieldValue.serverTimestamp();
+  }
   if (shouldUpdateOwnerRevenueShare) {
     roleUpdate.ownerRevenueSharePercent = ownerRevenueSharePercent;
   }
@@ -1353,6 +1791,347 @@ exports.setUserRole = onCall({ cors: true }, async (request) => {
     role: targetRole,
     previousRole: currentTargetRole,
     changed: true,
+  };
+});
+
+exports.getOwnerPayoutAccount = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const targetOwnerIdRaw = String(request.data?.ownerId ?? "").trim();
+  const callerRole = await getCurrentRole(callerUid);
+  const isPrivileged = callerRole === "operator" || callerRole === "superadmin";
+  const targetOwnerId = targetOwnerIdRaw || callerUid;
+
+  if (targetOwnerId !== callerUid && !isPrivileged) {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can read another owner's payout account.");
+  }
+
+  const ownerSnap = await db.collection("users").doc(targetOwnerId).get();
+  if (!ownerSnap.exists) {
+    throw new HttpsError("not-found", "Owner not found.");
+  }
+  const ownerData = ownerSnap.data() || {};
+  if (String(ownerData.role ?? "") !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+
+  return {
+    ok: true,
+    ownerId: targetOwnerId,
+    payoutAccount: payoutSummaryFromUserData(ownerData),
+    ownerTier: ownerTierSummaryFromUserData(ownerData),
+  };
+});
+
+exports.upsertOwnerPayoutAccount = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  const targetOwnerIdRaw = String(request.data?.ownerId ?? "").trim();
+  const targetOwnerId = targetOwnerIdRaw || callerUid;
+  const isPrivileged = callerRole === "operator" || callerRole === "superadmin";
+
+  if (targetOwnerId !== callerUid && !isPrivileged) {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can configure another owner's payout account.");
+  }
+
+  const ownerRef = db.collection("users").doc(targetOwnerId);
+  const ownerSnap = await ownerRef.get();
+  if (!ownerSnap.exists) {
+    throw new HttpsError("not-found", "Owner not found.");
+  }
+  const ownerData = ownerSnap.data() || {};
+  if (String(ownerData.role ?? "") !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+
+  const type = String(request.data?.type ?? "").trim().toLowerCase();
+  if (type !== "bank" && type !== "upi") {
+    throw new HttpsError("invalid-argument", "type must be bank or upi.");
+  }
+
+  const accountHolderName = normalizeText(request.data?.accountHolderName, 120);
+  if (!accountHolderName) {
+    throw new HttpsError("invalid-argument", "accountHolderName is required.");
+  }
+
+  const now = FieldValue.serverTimestamp();
+  const previous = ownerData.payoutAccount && typeof ownerData.payoutAccount === "object"
+    ? ownerData.payoutAccount
+    : null;
+
+  const payoutAccount = {
+    type,
+    accountHolderName,
+    status: "verification_pending",
+    verificationSource: "manual",
+    verificationReferenceId: "",
+    createdAt: previous?.createdAt || now,
+    updatedAt: now,
+  };
+
+  if (type === "bank") {
+    const accountNumber = sanitizeBankAccountNumber(request.data?.bankAccountNumber);
+    const ifsc = sanitizeIfsc(request.data?.ifsc);
+    payoutAccount.bankAccountMasked = maskBankAccount(accountNumber);
+    payoutAccount.ifsc = ifsc;
+    payoutAccount.bankAccountNumberEncrypted = Buffer.from(accountNumber, "utf8").toString("base64");
+    payoutAccount.upiVpaMasked = "";
+    payoutAccount.upiVpaEncrypted = "";
+  } else {
+    const upiVpa = sanitizeUpiVpa(request.data?.upiVpa);
+    payoutAccount.upiVpaMasked = maskUpiVpa(upiVpa);
+    payoutAccount.upiVpaEncrypted = Buffer.from(upiVpa, "utf8").toString("base64");
+    payoutAccount.bankAccountMasked = "";
+    payoutAccount.ifsc = "";
+    payoutAccount.bankAccountNumberEncrypted = "";
+  }
+
+  await ownerRef.set({
+    payoutAccount,
+    updatedAt: now,
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole || "owner",
+    action: "owner_payout_account_upserted",
+    entityType: "user",
+    entityId: targetOwnerId,
+    metadata: {
+      type,
+      accountHolderName,
+      status: payoutAccount.status,
+      source: targetOwnerId === callerUid ? "self_service" : "admin_console",
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    ownerId: targetOwnerId,
+    payoutAccount: payoutSummaryFromUserData({ payoutAccount }),
+  };
+});
+
+exports.verifyOwnerPayoutBankAccount = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  const targetOwnerIdRaw = String(request.data?.ownerId ?? "").trim();
+  const targetOwnerId = targetOwnerIdRaw || callerUid;
+  const isPrivileged = callerRole === "operator" || callerRole === "superadmin";
+
+  if (targetOwnerId !== callerUid && !isPrivileged) {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can verify another owner's payout account.");
+  }
+
+  const ownerRef = db.collection("users").doc(targetOwnerId);
+  const ownerSnap = await ownerRef.get();
+  if (!ownerSnap.exists) {
+    throw new HttpsError("not-found", "Owner not found.");
+  }
+  const ownerData = ownerSnap.data() || {};
+  if (String(ownerData.role ?? "") !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+  const payout = ownerData.payoutAccount && typeof ownerData.payoutAccount === "object"
+    ? ownerData.payoutAccount
+    : null;
+  if (!payout || String(payout.type ?? "") !== "bank") {
+    throw new HttpsError("failed-precondition", "Configure a bank payout account before verification.");
+  }
+
+  const encrypted = String(payout.bankAccountNumberEncrypted ?? "").trim();
+  if (!encrypted) {
+    throw new HttpsError("failed-precondition", "Bank account number not found for verification.");
+  }
+  const accountNumber = Buffer.from(encrypted, "base64").toString("utf8");
+  const ifsc = sanitizeIfsc(payout.ifsc ?? "");
+
+  let verificationStatus = "verified";
+  let verificationReferenceId = "manual_check";
+  let verificationSource = "manual";
+
+  try {
+    const contact = await razorpayApiRequest({
+      method: "POST",
+      path: "/contacts",
+      body: {
+        name: normalizeText(ownerData.name || payout.accountHolderName || "Owner", 120),
+        type: "employee",
+        reference_id: targetOwnerId.slice(0, 40),
+      },
+    });
+    const fundAccount = await razorpayApiRequest({
+      method: "POST",
+      path: "/fund_accounts",
+      body: {
+        contact_id: String(contact.id || ""),
+        account_type: "bank_account",
+        bank_account: {
+          name: payout.accountHolderName,
+          ifsc,
+          account_number: accountNumber,
+        },
+      },
+    });
+    verificationReferenceId = String(fundAccount.id || contact.id || "manual_check");
+    verificationSource = "razorpay_fund_account";
+  } catch (error) {
+    // If external verification call fails, keep account usable but flagged for operator follow-up.
+    verificationStatus = "verification_pending";
+    verificationReferenceId = "verification_call_failed";
+    verificationSource = "manual";
+  }
+
+  const updatedPayout = {
+    ...payout,
+    status: verificationStatus,
+    verificationSource,
+    verificationReferenceId,
+    updatedAt: FieldValue.serverTimestamp(),
+  };
+
+  await ownerRef.set({ payoutAccount: updatedPayout }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole || "owner",
+    action: "owner_payout_bank_verification_attempted",
+    entityType: "user",
+    entityId: targetOwnerId,
+    metadata: {
+      status: verificationStatus,
+      verificationSource,
+      verificationReferenceId,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    ownerId: targetOwnerId,
+    payoutAccount: payoutSummaryFromUserData({ payoutAccount: updatedPayout }),
+  };
+});
+
+exports.updateOwnerPrivilegeTier = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can update owner privilege tiers.");
+  }
+
+  const ownerId = normalizeText(request.data?.ownerId, 128);
+  if (!ownerId) {
+    throw new HttpsError("invalid-argument", "ownerId is required.");
+  }
+
+  const ownerRef = db.collection("users").doc(ownerId);
+  const ownerSnap = await ownerRef.get();
+  if (!ownerSnap.exists) {
+    throw new HttpsError("not-found", "Owner not found.");
+  }
+  const ownerData = ownerSnap.data() || {};
+  if (String(ownerData.role ?? "") !== "owner") {
+    throw new HttpsError("invalid-argument", "User is not an owner.");
+  }
+
+  const hasTier = Object.prototype.hasOwnProperty.call(request.data || {}, "ownerPrivilegeTier");
+  const hasAuto = Boolean(request.data?.autoFromCommission);
+  if (!hasTier && !hasAuto) {
+    throw new HttpsError("invalid-argument", "Provide ownerPrivilegeTier or set autoFromCommission=true.");
+  }
+
+  const commission = typeof ownerData.ownerRevenueSharePercent === "number"
+    ? clampPlatformCommissionPercent(ownerData.ownerRevenueSharePercent)
+    : DEFAULT_PLATFORM_COMMISSION_PERCENT;
+  const nextTier = hasAuto
+    ? ownerPrivilegeTierForCommission(commission)
+    : normalizeOwnerTier(request.data?.ownerPrivilegeTier);
+  const tierSource = hasAuto ? "auto" : "manual";
+
+  await ownerRef.set({
+    ownerPrivilegeTier: nextTier,
+    ownerPrivilegeTierSource: tierSource,
+    ownerPrivilegeTierUpdatedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_privilege_tier_updated",
+    entityType: "user",
+    entityId: ownerId,
+    metadata: {
+      ownerPrivilegeTier: nextTier,
+      ownerPrivilegeTierSource: tierSource,
+      ownerRevenueSharePercent: commission,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    ownerId,
+    ownerPrivilegeTier: nextTier,
+    ownerPrivilegeTierSource: tierSource,
+  };
+});
+
+exports.syncOwnerPrivilegeTiersFromCommission = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can sync owner privilege tiers.");
+  }
+
+  const ownersSnap = await db.collection("users").where("role", "==", "owner").get();
+  const batch = db.batch();
+  let updatedCount = 0;
+
+  for (const ownerDoc of ownersSnap.docs) {
+    const data = ownerDoc.data() || {};
+    const commission = typeof data.ownerRevenueSharePercent === "number"
+      ? clampPlatformCommissionPercent(data.ownerRevenueSharePercent)
+      : DEFAULT_PLATFORM_COMMISSION_PERCENT;
+    const nextTier = ownerPrivilegeTierForCommission(commission);
+    const currentTier = String(data.ownerPrivilegeTier ?? "").trim().toLowerCase();
+    if (currentTier !== nextTier || String(data.ownerPrivilegeTierSource ?? "") !== "auto") {
+      batch.set(ownerDoc.ref, {
+        ownerPrivilegeTier: nextTier,
+        ownerPrivilegeTierSource: "auto",
+        ownerPrivilegeTierUpdatedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      updatedCount += 1;
+    }
+  }
+
+  if (updatedCount > 0) {
+    await batch.commit();
+  }
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_privilege_tier_sync_run",
+    entityType: "access",
+    entityId: "owner_privilege_tier_sync",
+    metadata: {
+      updatedCount,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return {
+    ok: true,
+    updatedCount,
   };
 });
 
@@ -1444,6 +2223,9 @@ exports.updatePlatformDefaultCommission = onCall({ cors: true }, async (request)
       if (current < newDefault) {
         bumpBatch.update(ownerDoc.ref, {
           ownerRevenueSharePercent: newDefault,
+          ownerPrivilegeTier: ownerPrivilegeTierForCommission(newDefault),
+          ownerPrivilegeTierSource: "auto",
+          ownerPrivilegeTierUpdatedAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
         });
         // Write notice for this owner
@@ -1579,8 +2361,13 @@ exports.setOwnerCommissionOverride = onCall({ cors: true }, async (request) => {
   let newPercent;
   if (hasClear) {
     // Remove override — owner will use platform default
+    const platformSettings = await readPlatformSettings();
+    const defaultCommission = clampPlatformCommissionPercent(platformSettings.platformCommissionPercent);
     await ownerRef.update({
       ownerRevenueSharePercent: FieldValue.delete(),
+      ownerPrivilegeTier: ownerPrivilegeTierForCommission(defaultCommission),
+      ownerPrivilegeTierSource: "auto",
+      ownerPrivilegeTierUpdatedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
     newPercent = null;
@@ -1591,6 +2378,9 @@ exports.setOwnerCommissionOverride = onCall({ cors: true }, async (request) => {
     newPercent = clampPlatformCommissionPercent(input.percent);
     await ownerRef.update({
       ownerRevenueSharePercent: newPercent,
+      ownerPrivilegeTier: ownerPrivilegeTierForCommission(newPercent),
+      ownerPrivilegeTierSource: "auto",
+      ownerPrivilegeTierUpdatedAt: FieldValue.serverTimestamp(),
       updatedAt: FieldValue.serverTimestamp(),
     });
 
@@ -1661,6 +2451,139 @@ exports.setOwnerBookingBlock = onCall({ cors: true }, async (request) => {
   });
 
   return { ok: true, ownerId, bookingBlockOverride: unblock };
+});
+
+exports.approveOwnerProperty = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can approve properties.");
+  }
+
+  const propertyId = normalizeText(request.data?.propertyId, 128);
+  if (!propertyId) {
+    throw new HttpsError("invalid-argument", "propertyId is required.");
+  }
+
+  const propertyRef = db.collection("properties").doc(propertyId);
+  const propertySnap = await propertyRef.get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const propertyData = propertySnap.data() || {};
+  const currentStatus = String(propertyData.status ?? "");
+  if (currentStatus !== "pending_approval") {
+    throw new HttpsError("failed-precondition", "Only pending properties can be approved.");
+  }
+
+  await propertyRef.update({
+    status: "active",
+    approvalDecision: "approved",
+    approvedAt: FieldValue.serverTimestamp(),
+    approvalReviewedAt: FieldValue.serverTimestamp(),
+    approvalReviewedBy: callerUid,
+    approvalReviewedByRole: callerRole,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const ownerId = String(propertyData.ownerId ?? "");
+  if (ownerId) {
+    await db.collection("owner_notices").add({
+      ownerId,
+      type: "property_approved",
+      title: "Property approved",
+      message: `Your property "${String(propertyData.name ?? "")}" is approved and now listed as active.`,
+      propertyId,
+      dismissed: false,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_property_approved",
+    entityType: "property",
+    entityId: propertyId,
+    metadata: {
+      ownerId,
+      previousStatus: currentStatus,
+      nextStatus: "active",
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, propertyId, status: "active" };
+});
+
+exports.rejectOwnerProperty = onCall({ cors: true }, async (request) => {
+  assertAuth(request.auth);
+  const callerUid = request.auth.uid;
+  const callerRole = await getCurrentRole(callerUid);
+  if (callerRole !== "operator" && callerRole !== "superadmin") {
+    throw new HttpsError("permission-denied", "Only operator or superadmin can reject properties.");
+  }
+
+  const propertyId = normalizeText(request.data?.propertyId, 128);
+  const reason = normalizeText(request.data?.reason, 500);
+  if (!propertyId) {
+    throw new HttpsError("invalid-argument", "propertyId is required.");
+  }
+
+  const propertyRef = db.collection("properties").doc(propertyId);
+  const propertySnap = await propertyRef.get();
+  if (!propertySnap.exists) {
+    throw new HttpsError("not-found", "Property not found.");
+  }
+  const propertyData = propertySnap.data() || {};
+  const currentStatus = String(propertyData.status ?? "");
+  if (currentStatus !== "pending_approval") {
+    throw new HttpsError("failed-precondition", "Only pending properties can be rejected.");
+  }
+
+  await propertyRef.update({
+    status: "rejected",
+    approvalDecision: "rejected",
+    approvalReason: reason,
+    approvalRejectedAt: FieldValue.serverTimestamp(),
+    approvalReviewedAt: FieldValue.serverTimestamp(),
+    approvalReviewedBy: callerUid,
+    approvalReviewedByRole: callerRole,
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+
+  const ownerId = String(propertyData.ownerId ?? "");
+  if (ownerId) {
+    await db.collection("owner_notices").add({
+      ownerId,
+      type: "property_rejected",
+      title: "Property needs correction",
+      message: reason
+        ? `Your property "${String(propertyData.name ?? "")}" was rejected: ${reason}`
+        : `Your property "${String(propertyData.name ?? "")}" was rejected. Please update details and contact support/operator.`,
+      propertyId,
+      dismissed: false,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  await db.collection("audit_logs").add({
+    actorUserId: callerUid,
+    actorRole: callerRole,
+    action: "owner_property_rejected",
+    entityType: "property",
+    entityId: propertyId,
+    metadata: {
+      ownerId,
+      previousStatus: currentStatus,
+      nextStatus: "rejected",
+      reason,
+    },
+    createdAt: FieldValue.serverTimestamp(),
+  });
+
+  return { ok: true, propertyId, status: "rejected" };
 });
 
 exports.setCityScarcityMode = onCall({ cors: true }, async (request) => {
@@ -2116,6 +3039,29 @@ exports.createBookingWithAdvance = onCall({ cors: true }, async (request) => {
 
   if (!previousBookingsSnap.empty && !aadhaarRefId) {
     throw new HttpsError("failed-precondition", "Aadhaar reference is required from your second booking onward.");
+  }
+
+  // Anti-spam guardrail: cap concurrently active bookings for one user.
+  const [confirmedByUserSnap, checkedInByUserSnap] = await Promise.all([
+    db.collection("bookings")
+      .where("userId", "==", userId)
+      .where("bookingStatus", "==", "confirmed")
+      .get(),
+    db.collection("bookings")
+      .where("userId", "==", userId)
+      .where("bookingStatus", "==", "checked_in")
+      .get(),
+  ]);
+
+  const activeBookingCount = [...confirmedByUserSnap.docs, ...checkedInByUserSnap.docs]
+    .filter((item) => !item.data()?.checkOutAt)
+    .length;
+
+  if (activeBookingCount >= MAX_ACTIVE_BOOKINGS_PER_USER) {
+    throw new HttpsError(
+      "failed-precondition",
+      `You already have ${MAX_ACTIVE_BOOKINGS_PER_USER} active bookings. Complete one booking before creating another.`
+    );
   }
 
   const bedsSnapshot = await db.collection("beds").where("propertyId", "==", propertyId).get();
@@ -4243,11 +5189,53 @@ exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {
 
     const bookingRef = bookingDoc.ref;
     const bookingAvailabilityRef = db.collection("booking_availability").doc(bookingDoc.id);
+    const paymentSnapshot = await db.collection("payments").where("bookingId", "==", bookingDoc.id).limit(1).get();
+
+    let noShowChargeUpdate = null;
+    if (!paymentSnapshot.empty) {
+      const paymentDoc = paymentSnapshot.docs[0];
+      const paymentData = paymentDoc.data() || {};
+      const fallbackPlatformFeeInr = clampPlatformBookingFeeInr(settings.platformFeeInr);
+      const totals = computeCheckoutTotals({
+        lockedHourlyRate: Number(paymentData.lockedHourlyRate ?? paymentData.bedAmount ?? 120),
+        lockedHourlyBaseRate: Number(paymentData.lockedHourlyBaseRate ?? paymentData.lockedHourlyRate ?? paymentData.bedAmount ?? 120),
+        lockedPlatformHourlyRate: Number(paymentData.lockedPlatformHourlyRate ?? 0),
+        lockedGatewayHourlyRate: Number(paymentData.lockedGatewayHourlyRate ?? 0),
+        platformFeeInr: Number(
+          paymentData.lockedBookingPlatformFeeInr
+          ?? paymentData.platformFeePerBooking
+          ?? paymentData.platformFeeAmount
+          ?? fallbackPlatformFeeInr
+        ),
+        elapsedHours: 1,
+        advancePaid: Number(paymentData.advancePaid ?? 100),
+      });
+
+      noShowChargeUpdate = {
+        ref: paymentDoc.ref,
+        data: {
+          basePrice: totals.basePrice,
+          bedAmount: totals.bedAmount,
+          commissionAmount: totals.commissionAmount,
+          gatewayAmount: totals.gatewayAmount,
+          platformFeeAmount: totals.platformFeeAmount,
+          totalAmount: totals.totalAmount,
+          remainingPaid: totals.remainingPaid,
+          noShowChargeHours: 1,
+          noShowChargedAt: nowIso,
+          noShowChargePolicy: "minimum_1_hour",
+          paymentStatus: totals.remainingPaid > 0 ? "pending_settlement" : "settled",
+          updatedAt: FieldValue.serverTimestamp(),
+        },
+      };
+    }
 
     batch.set(bookingRef, {
       bookingStatus: "cancelled",
       cancelReason: "no_check_in_timeout",
       cancelledAt: nowIso,
+      noShowChargeHours: 1,
+      noShowChargePolicy: "minimum_1_hour",
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
@@ -4270,9 +5258,17 @@ exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {
         graceMinutes,
         checkInAt: String(booking.checkInAt ?? ""),
         cancelledAt: nowIso,
+        noShowChargeHours: 1,
+        noShowChargePolicy: "minimum_1_hour",
+        noShowChargeApplied: Boolean(noShowChargeUpdate),
       },
       createdAt: FieldValue.serverTimestamp(),
     });
+
+    if (noShowChargeUpdate) {
+      batch.set(noShowChargeUpdate.ref, noShowChargeUpdate.data, { merge: true });
+      opCount += 1;
+    }
 
     cancelled += 1;
     opCount += 3;
@@ -4283,6 +5279,14 @@ exports.cancelNoShowBookings = onSchedule("every 1 minutes", async () => {
 
   await flushBatch();
   return { ok: true, cancelled, graceMinutes };
+});
+
+exports.runBookingFlowSmokeCheck = onSchedule("every 60 minutes", async () => {
+  return runBookingFlowSmokeCheckNow({
+    actorUserId: "system",
+    actorRole: "system",
+    trigger: "schedule",
+  });
 });
 
 // ─── Commission Due Tracking ──────────────────────────────────────────────────

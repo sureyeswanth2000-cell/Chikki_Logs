@@ -129,8 +129,8 @@ function buildLocalDevOpenBooking() {
         bedAmount: 120,
         platformFeeAmount: 9,
         bedIssueStatus: "",
-        canModify: false,
-        canCheckIn: false,
+        canModify: true,
+        canCheckIn: true,
         canReportBedIssue: true,
         bedOptions: [
             { bedId: "dev-smoke-bed", bedCode: "SMK-1", bedType: "NON_AC", roomName: "101" },
@@ -182,6 +182,7 @@ function ConsumerContent() {
     const [maxFinalPrice, setMaxFinalPrice] = useState("");
     const [nearMeEnabled, setNearMeEnabled] = useState(false);
     const [userLocation, setUserLocation] = useState(null);
+    const [locatingUser, setLocatingUser] = useState(false);
     const [listings, setListings] = useState([]);
     const [openBookings, setOpenBookings] = useState([]);
     const [checkInLoadingId, setCheckInLoadingId] = useState("");
@@ -312,6 +313,53 @@ function ConsumerContent() {
         await runSearch();
     }
 
+    async function handleUseCurrentLocation() {
+        if (typeof window === "undefined" || !navigator.geolocation) {
+            setError("Current location is not supported in this browser.");
+            return;
+        }
+        setLocatingUser(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const location = await new Promise((resolve, reject) => {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        resolve({
+                            lat: Number(position.coords.latitude),
+                            lng: Number(position.coords.longitude),
+                        });
+                    },
+                    (geoError) => {
+                        reject(geoError);
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 12000,
+                        maximumAge: 60000,
+                    }
+                );
+            });
+            setUserLocation(location);
+            setNearMeEnabled(true);
+            if (!cityId) {
+                setNotice("Location detected. Select a city and search to rank nearest properties first.");
+                return;
+            }
+            await runSearch(cityId, duration, bedFilter, maxFinalPrice, location, true);
+        } catch {
+            setError("Could not get current location. Enable location permission and try again.");
+        } finally {
+            setLocatingUser(false);
+        }
+    }
+
+    function handleClearCurrentLocation() {
+        setNearMeEnabled(false);
+        setUserLocation(null);
+        setNotice("Current-location sorting is turned off.");
+    }
+
     function openBookingPage(listing, mode = "manual") {
         const params = new URLSearchParams({
             cityId: cityId || "",
@@ -344,6 +392,18 @@ function ConsumerContent() {
 
     async function handleCheckoutBooking(bookingId) {
         if (!user?.uid) return;
+        if (isDevLocalUser) {
+            setCheckoutLoadingId(bookingId);
+            setError(null);
+            setNotice(null);
+            try {
+                setOpenBookings((current) => current.filter((item) => item.id !== bookingId));
+                setNotice("Local smoke preview: checkout completed for DEV-OPEN-1. Remaining payment marked as settled.");
+            } finally {
+                setCheckoutLoadingId("");
+            }
+            return;
+        }
         const selectedMethod = String(checkoutPaymentMethodByBooking[bookingId] ?? "cash").toLowerCase();
         const paymentMethod = selectedMethod === "online" ? "online" : "cash";
 
@@ -408,6 +468,25 @@ function ConsumerContent() {
 
     async function handleCheckInBooking(bookingId) {
         if (!user?.uid) return;
+        if (isDevLocalUser) {
+            setCheckInLoadingId(bookingId);
+            setError(null);
+            setNotice(null);
+            try {
+                setOpenBookings((current) => current.map((item) => item.id === bookingId
+                    ? {
+                        ...item,
+                        bookingStatus: "checked_in",
+                        canCheckIn: false,
+                        canModify: true,
+                    }
+                    : item));
+                setNotice("Local smoke preview: check-in completed for DEV-OPEN-1.");
+            } finally {
+                setCheckInLoadingId("");
+            }
+            return;
+        }
         setCheckInLoadingId(bookingId);
         setError(null);
         setNotice(null);
@@ -450,6 +529,28 @@ function ConsumerContent() {
         event.preventDefault();
         if (!user?.uid) return;
         const draft = modifyDrafts[item.id] ?? {};
+        if (isDevLocalUser) {
+            setModifyLoadingId(item.id);
+            setError(null);
+            setNotice(null);
+            try {
+                setOpenBookings((current) => current.map((booking) => booking.id === item.id
+                    ? {
+                        ...booking,
+                        checkInAt: draft.checkInAt || booking.checkInAt,
+                        bedId: draft.bedId || booking.bedId,
+                        bedCode: draft.bedId === "dev-smoke-bed-2" ? "SMK-2" : "SMK-1",
+                        bedType: draft.bedId === "dev-smoke-bed-2" ? "AC" : "NON_AC",
+                        modifiedCount: Number(booking.modifiedCount ?? 0) + 1,
+                    }
+                    : booking));
+                setNotice("Local smoke preview: booking modified successfully.");
+                setModifyingBookingId("");
+            } finally {
+                setModifyLoadingId("");
+            }
+            return;
+        }
         setModifyLoadingId(item.id);
         setError(null);
         setNotice(null);
@@ -556,6 +657,21 @@ function ConsumerContent() {
                 </div>
             </div>
 
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs text-emerald-800">
+                    <p className="font-semibold">Verified listing controls</p>
+                    <p className="mt-1 text-emerald-700">Only active, approved inventory is shown in search.</p>
+                </div>
+                <div className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs text-sky-800">
+                    <p className="font-semibold">Price lock at confirmation</p>
+                    <p className="mt-1 text-sky-700">Your booking amount is locked when you confirm the bed.</p>
+                </div>
+                <div className="rounded-xl border border-violet-200 bg-violet-50 px-4 py-3 text-xs text-violet-800">
+                    <p className="font-semibold">In-app support path</p>
+                    <p className="mt-1 text-violet-700">Use Support for booking help, bed issues, and checkout escalation.</p>
+                </div>
+            </div>
+
             {/* Aadhaar nudge: show after user has at least one booking and has not set Aadhaar */}
             {user && !aadhaarBannerDismissed && openBookings.length > 0 && !profile?.aadhaarRefId ? (
               <div className="mt-4 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
@@ -563,7 +679,7 @@ function ConsumerContent() {
                 <div className="flex-1">
                   <strong>Add Aadhaar if you want faster repeat booking</strong>
                   <p className="mt-1 text-xs text-amber-700">
-                    Aadhaar is optional for booking right now. If you want to save it for later use, add it from your profile.
+                                        Aadhaar is optional for booking. If you add it, we store only a protected reference and masked last-4 in normal app records.
                   </p>
                   <div className="mt-2 flex gap-2">
                     <a
@@ -598,6 +714,32 @@ function ConsumerContent() {
             <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
                 <h2 className="text-xl font-semibold">Confirm Location And Search Beds</h2>
                 <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={handleSearch}>
+                    <div className="md:col-span-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                type="button"
+                                onClick={() => void handleUseCurrentLocation()}
+                                disabled={locatingUser}
+                                className="rounded-full bg-sky-700 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-sky-400"
+                            >
+                                {locatingUser ? "Detecting location..." : "Use Current Location"}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleClearCurrentLocation}
+                                disabled={!nearMeEnabled && !userLocation}
+                                className="rounded-full border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Clear Location
+                            </button>
+                            <span className="text-xs text-sky-800">
+                                {nearMeEnabled && userLocation
+                                    ? `Using current location (${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}) for nearest-first sorting.`
+                                    : "Enable current location to rank results by nearest property and improve directions."}
+                            </span>
+                        </div>
+                    </div>
+
                     <select value={cityId} onChange={(event) => setCityId(event.target.value)} className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500" required disabled={loadingCities}>
                         <option value="">{loadingCities ? "Loading cities..." : "Select city"}</option>
                         {cities.map((city) => (<option key={city.id} value={city.id}>{city.name}, {city.state}</option>))}
@@ -654,6 +796,7 @@ function ConsumerContent() {
                             ) : null}
                             <p className="mt-2 text-sm font-semibold text-slate-900">Hourly from INR {item.minHourlyPrice} | Overnight from INR {item.minOvernightPrice}</p>
                             <p className="mt-1 text-xs text-slate-500">Shown rates are bed prices. Platform fee (INR {item.platformFeeInr ?? 9}) is added once per booking at checkout.</p>
+                            <p className="mt-1 text-xs text-slate-500">Need help deciding? Use ratings, distance, and transit summary before you lock the booking.</p>
                             <p className="mt-1 text-xs font-semibold text-slate-600">Bed rating: {ratingText(item.ratingAverage, item.ratingCount)}</p>
                             {item.recommendedBedId ? (
                                 <div className="mt-2 rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-900">
@@ -681,7 +824,7 @@ function ConsumerContent() {
             </section>
 
             {user ? (
-                <section className="glass-card animate-stagger mt-8 rounded-2xl p-6">
+                <section id="open-bookings" className="glass-card animate-stagger mt-8 rounded-2xl p-6">
                     <h2 className="text-xl font-semibold">Live / Open Bookings</h2>
                     <p className="mt-1 text-sm text-slate-500">Flow: Booked until check-in time, then Check-In, then Checkout at end of stay.</p>
                     {loadingOpenBookings ? (

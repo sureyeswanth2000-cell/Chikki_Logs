@@ -207,6 +207,7 @@ function BookingContent() {
         backToSearchParams.set("userLng", String(userLocation.lng));
     }
     const backToSearchHref = `/consumer?${backToSearchParams.toString()}`;
+    const openBookingsHref = `${backToSearchHref}#open-bookings`;
 
     const loadListing = useCallback(async () => {
         if (isDevSmokePreview) {
@@ -320,6 +321,11 @@ function BookingContent() {
         setError(null);
         setNotice(null);
         try {
+            if (isDevSmokePreview) {
+                setNotice("Local smoke preview: booking created as DEV-BOOK-1 with bed SMK-1. You can now test open-booking actions from Consumer Portal.");
+                setStep("success");
+                return;
+            }
             const result = await createBookingWithAdvance({
                 userId: user.uid,
                 listing,
@@ -357,6 +363,11 @@ function BookingContent() {
                             ? "Choose a future check-in time within the next 30 days. The shown bed price is locked as the Future booking price after confirmation."
                             : "Select the exact bed and check-in time first. Aadhaar stays optional in the review step."}
                     </p>
+                    <div className="mt-4 grid gap-2 text-xs md:grid-cols-3">
+                        <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sky-800">Final booking price is locked at confirmation.</div>
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800">Checkout amount is based on actual stay rules.</div>
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-amber-800">Aadhaar is optional and stored as protected reference data.</div>
+                    </div>
                 </div>
 
                 {error && <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
@@ -499,6 +510,7 @@ function BookingContent() {
                                                 className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-sky-500"
                                             />
                                             <p className="mt-1 text-xs text-slate-500">If you have Aadhaar, you can share it now or add it later from your Profile. Booking stays available either way.</p>
+                                            <p className="mt-1 text-xs text-slate-500">We never depend on raw Aadhaar in normal booking records.</p>
                                         </div>
                                     )}
 
@@ -518,7 +530,7 @@ function BookingContent() {
                                     <h3 className="text-sm font-semibold text-emerald-800">Booking opened</h3>
                                     <p className="mt-1 text-sm text-emerald-700">You can check in from Live / Open Bookings when your start time arrives.</p>
                                     <div className="mt-4 flex flex-wrap gap-3">
-                                        <Link href={backToSearchHref} prefetch={false} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
+                                        <Link href={openBookingsHref} prefetch={false} className="rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700">
                                             View Open Bookings
                                         </Link>
                                         <button type="button" onClick={() => router.refresh()} className="rounded-full border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">

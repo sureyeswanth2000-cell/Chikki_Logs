@@ -6,6 +6,7 @@ import { DemandPricingPanel } from "@/components/admin/demand-pricing-panel";
 import { useAuth } from "@/context/auth-context";
 import {
   addCity,
+  approvePendingProperty,
   approveOwnerApplication,
   confirmOwnerCommissionDueSettlement,
   dismissOperatorNotice,
@@ -16,8 +17,10 @@ import {
   getOwnerCommissionDuesForOperator,
   getOwnersForCommissionManagement,
   getOwnersWithBlockStatus,
+  getPendingPropertyApprovals,
   getPlatformSettings,
   getRoleChangeHistory,
+  rejectPendingProperty,
   runCommissionDuesManual,
   saveOwnerCommissionOverride,
   savePlatformDefaultCommission,
@@ -57,6 +60,9 @@ export default function OperatorPage() {
   const [applications, setApplications] = useState([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsNotice, setAppsNotice] = useState(null);
+  const [propertyApprovals, setPropertyApprovals] = useState([]);
+  const [propertyApprovalsLoading, setPropertyApprovalsLoading] = useState(false);
+  const [propertyApprovalsNotice, setPropertyApprovalsNotice] = useState(null);
   const [cities, setCities] = useState([]);
   const [citiesLoading, setCitiesLoading] = useState(false);
   const [citiesNotice, setCitiesNotice] = useState(null);
@@ -125,6 +131,19 @@ export default function OperatorPage() {
       setAppsNotice("Could not load owner applications.");
     } finally {
       setAppsLoading(false);
+    }
+  }, []);
+
+  const loadPropertyApprovals = useCallback(async () => {
+    setPropertyApprovalsLoading(true);
+    setPropertyApprovalsNotice(null);
+    try {
+      const data = await getPendingPropertyApprovals();
+      setPropertyApprovals(data);
+    } catch {
+      setPropertyApprovalsNotice("Could not load pending property approvals.");
+    } finally {
+      setPropertyApprovalsLoading(false);
     }
   }, []);
 
@@ -224,6 +243,7 @@ export default function OperatorPage() {
   useEffect(() => {
     void loadMetrics();
     void loadApplications();
+    void loadPropertyApprovals();
     void loadCities();
     void loadSettings();
     void loadOwnerDues();
@@ -231,7 +251,7 @@ export default function OperatorPage() {
     void loadOwnersList();
     void loadBlockOwners();
     void loadRoleChanges();
-  }, [loadApplications, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices, loadOwnersList, loadBlockOwners, loadRoleChanges]);
+  }, [loadApplications, loadPropertyApprovals, loadCities, loadMetrics, loadSettings, loadOwnerDues, loadOperatorNotices, loadOwnersList, loadBlockOwners, loadRoleChanges]);
 
   async function handleSaveCommission(event) {
     event.preventDefault();
@@ -385,6 +405,17 @@ export default function OperatorPage() {
     setSearchError(null);
     setSearchNotice(null);
 
+    if (searchResult.role === selectedRole) {
+      setSearchNotice("No change needed. User already has this role.");
+      return;
+    }
+
+    const userLabel = searchResult.name || searchResult.phoneNumber || "this user";
+    const confirmed = window.confirm(
+      `Update role for "${userLabel}" from ${String(searchResult.role).toUpperCase()} to ${String(selectedRole).toUpperCase()}?`
+    );
+    if (!confirmed) return;
+
     try {
       await updateManagedUserRole(
         searchResult.id,
@@ -396,7 +427,7 @@ export default function OperatorPage() {
         role: selectedRole,
         ownerRevenueSharePercent: selectedRole === "owner" ? ownerRevenueSharePercent : prev.ownerRevenueSharePercent,
       } : prev));
-      setSearchNotice(`Role updated to ${selectedRole}.`);
+      setSearchNotice(`Role updated from ${searchResult.role} to ${selectedRole}.`);
     } catch (error) {
       setSearchError(error instanceof Error ? error.message : "Role update failed.");
     }
@@ -422,6 +453,36 @@ export default function OperatorPage() {
       setAppsNotice(`${application.businessName} was approved with ${agreedPercent}% owner revenue share.`);
     } catch (error) {
       setAppsNotice(error instanceof Error ? error.message : "Approval failed.");
+    }
+  }
+
+  async function handleApprovePropertyApproval(item) {
+    if (!window.confirm(`Approve property "${item.name}" for listing?`)) {
+      return;
+    }
+    setPropertyApprovalsNotice(null);
+    try {
+      await approvePendingProperty(item.id);
+      setPropertyApprovals((prev) => prev.filter((entry) => entry.id !== item.id));
+      setPropertyApprovalsNotice(`Property "${item.name}" approved and moved to active listing.`);
+      await loadMetrics();
+    } catch (error) {
+      setPropertyApprovalsNotice(error instanceof Error ? error.message : "Could not approve property.");
+    }
+  }
+
+  async function handleRejectPropertyApproval(item) {
+    const reason = window.prompt(`Optional rejection reason for "${item.name}"`, "");
+    if (reason === null) {
+      return;
+    }
+    setPropertyApprovalsNotice(null);
+    try {
+      await rejectPendingProperty(item.id, reason.trim());
+      setPropertyApprovals((prev) => prev.filter((entry) => entry.id !== item.id));
+      setPropertyApprovalsNotice(`Property "${item.name}" was rejected.`);
+    } catch (error) {
+      setPropertyApprovalsNotice(error instanceof Error ? error.message : "Could not reject property.");
     }
   }
 
@@ -556,7 +617,7 @@ export default function OperatorPage() {
         <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
           <h2 className="text-lg font-bold text-slate-800">Consumer / Owner Role Swap</h2>
           <p className="mt-1 text-sm text-slate-500">
-            Operator can review users and switch only between consumer and owner.
+            Operator can review users and switch only between consumer and owner. Each change now requires explicit confirmation.
           </p>
 
           {searchError ? (
@@ -1218,6 +1279,68 @@ export default function OperatorPage() {
                     >
                       Approve To Owner
                     </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-800">Pending Property Approvals</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Every new owner property stays pending until operator/superadmin review.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadPropertyApprovals()}
+              className="rounded-full border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {propertyApprovalsNotice ? (
+            <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+              {propertyApprovalsNotice}
+            </div>
+          ) : null}
+
+          {propertyApprovalsLoading ? (
+            <p className="mt-4 text-sm text-slate-500">Loading pending properties...</p>
+          ) : propertyApprovals.length === 0 ? (
+            <p className="mt-4 text-sm italic text-slate-400">No pending property approvals right now.</p>
+          ) : (
+            <div className="mt-4 space-y-3">
+              {propertyApprovals.map((item) => (
+                <div key={item.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="font-semibold text-slate-800">{item.name}</p>
+                      <p className="text-sm text-slate-600">Owner: {item.ownerName || item.ownerId}</p>
+                      <p className="text-sm text-slate-600">Phone: {item.ownerPhone || "—"}</p>
+                      <p className="text-sm text-slate-600">City: {item.cityName || "Unknown city"}</p>
+                      <p className="text-sm text-slate-600">Address: {item.exactAddress || "—"}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void handleApprovePropertyApproval(item)}
+                        className="rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-700"
+                      >
+                        Approve Listing
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleRejectPropertyApproval(item)}
+                        className="rounded-full border border-rose-300 px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Reject
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}

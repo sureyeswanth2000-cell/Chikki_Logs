@@ -7,10 +7,13 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "qa:dev-bypass": "node scripts/qa-dev-bypass.mjs",
+    "qa:roles-full": "node scripts/qa-role-coverage.mjs",
     "test:security:rules": "npx firebase emulators:exec --only firestore \"node scripts/security-rules-tests.mjs\"",
     "seed:cities": "node --env-file=.env.local scripts/seed-cities.mjs",
     "backfill:booking-availability": "node --env-file=.env.local scripts/backfill-booking-availability.mjs",
-    "seed:superadmin": "node --env-file=.env.local scripts/bootstrap-superadmin.mjs"
+    "seed:superadmin": "node --env-file=.env.local scripts/bootstrap-superadmin.mjs",
+    "seed:role-test-users": "node --env-file=.env.local scripts/create-role-test-users.mjs"
   },
   "dependencies": {
     "firebase": "^12.10.0",
