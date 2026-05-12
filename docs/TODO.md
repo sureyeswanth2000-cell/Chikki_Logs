@@ -544,6 +544,138 @@
 - [ ] Add browser/mobile performance testing on low-end Android devices and slow mobile network.
 - [ ] Add launch-day traffic simulation before every new city launch.
 
+### 2030 Final Completeness Layer
+- [ ] Keep this layer as the final checklist before saying the roadmap is complete enough for real production planning.
+- [ ] For every future feature, define owner, rollout flag, support path, analytics event, abuse risk, failure mode, and rollback plan.
+
+### 2030 Feature Flags And Rollout Control
+- [ ] Add feature flag table/config for turning features on or off by city, role, user segment, app version, and environment.
+- [ ] Add percentage rollout support: release a feature to 1%, 10%, 50%, then 100% after monitoring health.
+- [ ] Add emergency kill switches for booking, payment, demand pricing, train tracking, rewards, AI summaries, notifications, and owner payouts.
+- [ ] Add feature flag audit logs: who changed what flag, old value, new value, reason, and when.
+- [ ] Add safe default rule: if feature flag service/config fails, critical booking/payment paths should fall back to the safest stable behavior.
+- [ ] Add release gate checklist: feature flag exists, rollback works, monitoring exists, support team knows the feature, and analytics event is defined.
+
+### 2030 Support Operations
+- [ ] Add support ticket table: user, role, booking/payment/property link, issue type, priority, SLA, assigned operator, status, and resolution.
+- [ ] Add support SLA rules: payment issues fastest, active booking issues next, safety issues immediate, profile/general issues slower.
+- [ ] Add operator assignment flow: unassigned queue, assigned to me, escalated, waiting for user, waiting for owner, resolved.
+- [ ] Add support escalation ladder: operator -> senior operator -> superadmin -> engineering/finance.
+- [ ] Add refund/support handoff: support ticket can create refund request, but finance approval is separate.
+- [ ] Add canned response templates for common problems: payment pending, bed issue, owner not responding, refund requested, login issue.
+- [ ] Add support quality metrics: first response time, resolution time, reopened tickets, refund rate, owner response time, and user satisfaction.
+- [ ] Add support audit view so every sensitive support action is reviewable.
+
+### 2030 Photos, Media, And Storage Safety
+- [ ] Add property photo upload rules: allowed formats, max file size, max photo count, required minimum photos, and owner/operator permissions.
+- [ ] Add image compression/resizing pipeline so listing photos are fast on low-end phones and cheap to serve.
+- [ ] Add storage path design by environment, owner, property, room, bed, and verification state.
+- [ ] Add photo moderation queue for unsafe, fake, duplicate, or misleading property images.
+- [ ] Add duplicate image detection for reused property photos across multiple listings.
+- [ ] Add image metadata stripping before public display to avoid leaking device/location metadata.
+- [ ] Add broken image fallback and owner prompt to replace missing/poor photos.
+- [ ] Add storage cost monitoring for image uploads, transformations, and CDN delivery.
+
+### 2030 Maps, Location, And Navigation Fallbacks
+- [ ] Add location fallback rule: if GPS fails, let user pick city/station manually.
+- [ ] Add map fallback rule: if map tiles fail, show address, landmark, distance text, and Google Maps directions link.
+- [ ] Add directions fallback rule: if directions link fails, copyable address and landmark should still be available.
+- [ ] Add location accuracy indicator so users know whether location is exact, approximate, manual, or unavailable.
+- [ ] Add city/station alias table for common spelling mistakes and local names.
+- [ ] Add map/API cost guardrails before using paid location APIs heavily.
+- [ ] Add safety rule: do not expose exact consumer location to owners; owners only need booking and arrival context.
+- [ ] Add location abuse monitoring for fake GPS, repeated suspicious check-ins, and impossible travel patterns.
+
+### 2030 Product Analytics Event Taxonomy
+- [ ] Define clean analytics events before scaling: `app_opened`, `city_selected`, `listing_viewed`, `bed_selected`, `booking_started`, `booking_confirmed`, `checkin_completed`, `checkout_started`, `payment_started`, `payment_success`, `payment_failed`, `issue_reported`, `rating_submitted`, `support_ticket_created`.
+- [ ] Add event naming rules: lowercase snake_case, clear actor, safe IDs only, no secret/private raw data.
+- [ ] Add event property rules: city_id, property_id, booking_type, payment_mode, app_version, platform, role, and experiment/feature flag where safe.
+- [ ] Add funnel dashboards: browse -> bed select -> booking start -> booking confirmed -> check-in -> checkout -> payment success -> rating.
+- [ ] Add failure funnels: booking abandoned, payment failed, check-in missed, issue reported, refund requested.
+- [ ] Add product analytics retention and privacy rules.
+- [ ] Add analytics validation job so impossible or missing event sequences are detected.
+
+### 2030 Accessibility And Inclusive Design
+- [ ] Add accessibility checklist for every main flow: login, browse, booking, payment, support, owner dashboard, operator console.
+- [ ] Support screen readers with meaningful labels, form errors, button names, and status announcements.
+- [ ] Support keyboard navigation for web users and predictable focus order.
+- [ ] Maintain strong color contrast in light and dark mode.
+- [ ] Support large text and small screens without broken layouts.
+- [ ] Add low-end Android usability testing: slow CPU, low memory, small screen, patchy network.
+- [ ] Avoid using color alone to communicate status; pair color with text/icon.
+- [ ] Add accessibility acceptance tests before public app launch.
+
+### 2030 Localization And Regional Readiness
+- [ ] Prepare English-first copy with a structure that can later support Telugu, Hindi, and other local languages.
+- [ ] Add translation key strategy so text is not scattered hardcoded across UI.
+- [ ] Format currency, date, time, duration, and distance consistently for Indian users.
+- [ ] Add local city/station/landmark wording so search feels natural.
+- [ ] Add simple-language mode for important rules: payment, refund, Aadhaar, cancellation, support, and owner agreement.
+- [ ] Add support message templates per language before city expansion.
+- [ ] Add fallback when translation is missing: show English, not blank text.
+
+### 2030 Feature Abuse And Fraud Controls
+- [ ] Add fake rating detection: repeated ratings from same device/user pattern, suspicious timing, or owner-linked accounts.
+- [ ] Add rewards/coupon abuse controls before launching wallet, cashback, loyalty, or referral features.
+- [ ] Add support abuse controls: repeated fake issue reports, refund farming, owner harassment, or spam tickets.
+- [ ] Add referral abuse controls if referrals are added: same device, same payment method, same location, repeated self-referral signals.
+- [ ] Add wallet abuse controls: non-withdrawable credits, expiry, max balance, per-user campaign limits, and audit trail.
+- [ ] Add account risk score from cancellations, payment failures, fake issues, OTP abuse, and suspicious device/IP patterns.
+- [ ] Add human review before permanent blocks; automatic blocks should be temporary unless risk is extreme.
+
+### 2030 Vendor Exit And Fallback Plan
+- [ ] Add Razorpay fallback plan: what happens if gateway is down, account is limited, fees change, or settlement APIs fail.
+- [ ] Add Gemini fallback plan: deterministic monitoring continues, summaries degrade gracefully, and no critical alert depends only on AI.
+- [ ] Add Firebase/Google Cloud exit awareness: document what data lives where and how to export it if needed.
+- [ ] Add n8n fallback plan: core jobs stay in Firebase/Cloud Scheduler/Workflows; n8n should not be the only path for critical booking/payment logic.
+- [ ] Add email/SMS/WhatsApp provider fallback plan for critical notifications.
+- [ ] Add train API fallback plan: if train data provider fails, app still supports manual reminder and ordinary booking flow.
+- [ ] Add vendor cost review every quarter.
+
+### 2030 Admin, Owner, And Operator Training
+- [ ] Create operator manual for owner approval, property verification, payment issue, refund request, bad-bed issue, user block, and emergency switch.
+- [ ] Create owner manual for adding property, adding beds, handling bookings, checkout, dues, payouts, issue response, and photo quality.
+- [ ] Create superadmin manual for settings, role changes, finance controls, AI alerts, incident response, and release approval.
+- [ ] Add short training videos or screenshots for high-risk workflows.
+- [ ] Add internal checklist for new operator onboarding and permission review.
+- [ ] Add periodic training refresh after major feature changes.
+
+### 2030 Release Notes And Changelog
+- [ ] Maintain user-facing release notes for important visible changes.
+- [ ] Maintain internal changelog for operators and support: what changed, what can break, what to verify, and rollback notes.
+- [ ] Link every production release to commit, deployment, tests passed, feature flags changed, and monitoring result.
+- [ ] Add release health review after 24 hours: errors, payments, bookings, support tickets, owner issues, and AI findings.
+- [ ] Add known issues list so support can answer users honestly during rollout.
+
+### 2030 Data Migration Rehearsal
+- [ ] Run Firestore-to-Data Connect migration dry run in a non-production environment before any real cutover.
+- [ ] Create migration mapping for every Firestore collection to SQL table/view, including skipped temporary data.
+- [ ] Create row count, sample record, financial total, and booking state reconciliation checks.
+- [ ] Define mismatch threshold: which mismatches block cutover and which can be fixed later.
+- [ ] Add rollback rehearsal: switch app back to old source during test if migration fails.
+- [ ] Add dual-read/dual-write verification window before final source-of-truth switch.
+- [ ] Add final cutover checklist with owner, time, freeze window, verification steps, and rollback deadline.
+
+### 2030 SLOs And Service Targets
+- [ ] Define booking creation target: normal booking confirmation should complete under 2 seconds when services are healthy.
+- [ ] Define availability check target: listing/bed availability should feel fast and avoid heavy scans.
+- [ ] Define payment update target: payment success should reflect in app under 5 seconds after verified gateway signal.
+- [ ] Define checkout target: checkout calculation and payment start should be reliable under normal mobile network.
+- [ ] Define uptime target for web/app, booking path, payment path, and operator console.
+- [ ] Define job freshness targets: no-show job lag, payment reconciliation lag, snapshot freshness, AI digest freshness.
+- [ ] Define alert target: critical app/payment issue should notify owner/operator/admin within 1-2 minutes.
+- [ ] Track SLO violations in `ops` tables and review weekly.
+
+### 2030 Degraded Mode And Partial Outage UX
+- [ ] Define what users see when payment gateway is down: booking can pause safely or show clear retry/support path.
+- [ ] Define what users see when AI is down: app continues normally; only summaries/recommendations pause.
+- [ ] Define what users see when maps/location fail: manual city/station selection and address directions still work.
+- [ ] Define what users see when notifications fail: in-app status remains source of truth.
+- [ ] Define what owners/operators see when analytics snapshots are late: show last updated time and avoid wrong fresh-looking data.
+- [ ] Define what happens when database is slow: protect booking/payment first, delay dashboards and AI jobs.
+- [ ] Add maintenance mode banner for planned downtime or degraded operations.
+- [ ] Add clear support path for users caught in partial failure: payment pending, booking stuck, checkout failed, or issue not submitted.
+
 ## City Management
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access
 - [x] Prevent duplicate cities — reject add/save if a city with the same name + state combination already exists
