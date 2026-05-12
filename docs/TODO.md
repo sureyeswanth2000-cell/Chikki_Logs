@@ -203,6 +203,29 @@
 - [x] Add deployment and environment checklist to docs
 - [ ] Expand work log with future completed milestones
 
+## Scope Lock: Data Connect Backend Architecture
+- [x] Finalize storage boundary decisions in architecture roadmap: SQL/Data Connect for permanent business data, Firestore for ephemeral state, and Cloud Logging/raw store for append-only logs/debug trails
+- [ ] Lock Phase 1 delivery scope for migration: bookings, payments, rating events/summaries, owner commission dues, payouts, issue reports, and role-safe read views
+- [ ] Define non-negotiable acceptance criteria for Phase 1: price lock correctness, checkout charge rules, role-safe rating visibility, and no unauthorized data exposure
+- [ ] Freeze schema ownership and naming convention for `core`, `engagement`, `ops`, and `analytics` domains
+- [ ] Document exact cutover guardrails: dual-run period, rollback trigger conditions, and source-of-truth switch checklist
+
+## Data Connect / SQL Migration Execution
+- [ ] Create Data Connect schema files for `core` transactional entities (users, properties, rooms, beds, bookings, payments)
+- [ ] Create Data Connect schema files for `engagement` entities (rating_events, rating_summaries, feedback, issue reports)
+- [ ] Create Data Connect schema files for `ops` entities (job_runs, job_failures, automation_runs, watermarks, audit events)
+- [ ] Create Data Connect schema files for `analytics` entities (facts, dimensions, daily snapshots)
+- [ ] Add privacy-safe SQL views for app usage: owner aggregate-only rating view and consumer self-history view
+- [ ] Add BI and external read-only views excluding sensitive identity and internal operational secrets
+- [ ] Implement incremental job watermark model (`updated_at` and `last_processed_id`) for all scheduled sync/aggregation tasks
+- [ ] Implement daily snapshot generation jobs for KPI, city, property, owner, job, and automation summaries
+- [ ] Map existing Firestore collections to target SQL tables and produce migration mapping sheet
+- [ ] Build migration scripts to export, transform, and import dev/test Firestore data into SQL tables
+- [ ] Run row-count and sample-record reconciliation checks between Firestore source and SQL target
+- [ ] Enable dual-write/dual-read verification window and log all mismatches before cutover
+- [ ] Complete phased cutover by domain, leaving only temporary collections in Firestore (`bed_locks`, `rate_limit_windows`, `temporary_job_tokens`, `short_lived_heartbeats`)
+- [ ] Validate production read-only external BI access against approved safe views
+
 ## Autonomous SRE & Dev Pipeline (Future)
 - [ ] Design 6-hour self-healing monitoring loop for Firebase logs using n8n on Cloud Run
 - [ ] Query Google Cloud Logging for Firebase Data Connect and Firestore errors from the last 6 hours
@@ -216,6 +239,205 @@
 - [ ] Enforce SQL safety: Data Connect schema changes must include generated migration scripts
 - [ ] Store Jira, GitHub, Gemini, and Antigravity secrets in Google Secret Manager for n8n
 - [ ] Generate the initial n8n JSON workflow for Firebase log analysis and Jira ticket creation
+
+## 2030 A to Z Master Roadmap
+- [ ] Keep this section as the big simple roadmap: what data we store, how we protect it, how the app feels, how we host it, how we debug it, and how AI watches it.
+- [ ] Explain every future technical decision in plain language first, then add exact tables, jobs, APIs, and tests under it.
+- [ ] Treat booking, payment, identity, and safety as the heart of the app; beautiful features come after these are reliable.
+- [ ] Build for one person using it today and a city full of people using it tomorrow without changing the foundation.
+
+### 2030 Database Plan - Simple Rule
+- [ ] Use Firebase Data Connect backed by Cloud SQL PostgreSQL for permanent business truth: users, properties, beds, bookings, payments, payouts, ratings, issues, jobs, and analytics.
+- [ ] Use Firestore only for short-lived state: bed locks, rate limits, temporary job tokens, notification trigger documents, and simple heartbeat documents.
+- [ ] Use Cloud Logging for raw technical logs: function crashes, request failures, deploy logs, webhook debug logs, and infrastructure events.
+- [ ] Use `ops` tables for machine-readable operations: jobs, failures, watermarks, anomalies, app health, payment health, and node health.
+- [ ] Use `ai_logs` tables for AI-readable summaries: cleaned issue summaries that Gemini can read without scanning private raw data.
+- [ ] Never make dashboards scan raw booking/payment tables repeatedly; dashboards must read facts, summaries, or snapshot tables.
+- [ ] Never make AI read secret or raw private data directly; AI should read sanitized summaries with IDs and safe context.
+
+### 2030 Database Schemas And What They Save
+- [ ] `core.users`: one row per person; saves name, phone, email, role-safe profile fields, status, timestamps, and safe identity references only.
+- [ ] `core.user_roles`: saves which user has which role, who assigned it, when it was assigned, and whether it is active.
+- [ ] `core.cities`: saves supported cities, state, active status, latitude, longitude, service radius, and city-level controls.
+- [ ] `core.properties`: saves owner property details, address, city, location, approval status, listing status, and owner relationship.
+- [ ] `core.rooms`: saves rooms inside properties, room name, floor label, active status, and property relationship.
+- [ ] `core.beds`: saves bed code, room, property, bed type, base prices, active status, and bookable inventory data.
+- [ ] `core.bed_blocks`: saves owner/operator bed blocks, reason, start time, end time, who created it, and active state.
+- [ ] `core.bookings`: saves every booking truth: consumer, owner, property, bed, booking type, status, check-in/out, locked price, payment status, cancellation reason, modification details, and identity reference.
+- [ ] `core.booking_state_events`: saves every important booking status change so we can replay what happened and debug booking timeline problems.
+- [ ] `core.payments`: saves payment mode, gateway order/payment IDs, amount, platform fee, owner share, status, collected time, and booking relationship.
+- [ ] `core.payment_events`: saves every payment status update from app, gateway, webhook, manual correction, and reconciliation.
+- [ ] `core.owner_commission_dues`: saves platform commission owed by owners for cash bookings, due status, amount, booking link, and settlement references.
+- [ ] `core.owner_payouts`: saves payout period, gross amount, commission deduction, net amount, payout status, approval, and processed time.
+- [ ] `core.payout_accounts`: saves owner payout account metadata, provider reference, verification status, and masked bank/UPI details only.
+- [ ] `core.platform_settings`: saves safe configurable settings like fees, booking grace minutes, demand pricing enablement, emergency switches, and limits.
+- [ ] `core.owner_applications`: saves owner application details, approval state, operator/superadmin decision, decision reason, and audit references.
+- [ ] `engagement.rating_events`: saves each consumer rating event, booking link, score, optional comment, aggregation state, and timestamps.
+- [ ] `engagement.rating_summaries`: saves fast average rating/count per bed/property/owner so listings do not scan every rating.
+- [ ] `engagement.issue_reports`: saves bed/property/booking issues, severity, reporter, replacement bed, resolution state, and SLA timestamps.
+- [ ] `engagement.feedback_events`: saves app feedback, support feedback, feature feedback, tags, severity, and routing status.
+- [ ] `engagement.support_threads`: saves support conversation metadata, assigned operator, status, priority, and linked booking/payment/issue.
+- [ ] `ops.audit_events`: saves who did what, to which record, before/after summary, reason, and time; used for trust and investigation.
+- [ ] `ops.job_definitions`: saves each job name, owner, schedule, purpose, expected runtime, allowed overlap rule, and alert threshold.
+- [ ] `ops.job_runs`: saves every job run, trigger type, status, start/end time, duration, processed count, watermark used, and error summary.
+- [ ] `ops.job_failures`: saves failed job details, stack summary, retry count, severity, owner, and whether human action is needed.
+- [ ] `ops.job_watermarks`: saves each job's last processed time/id so jobs process only new changes, not full tables.
+- [ ] `ops.anomaly_events`: saves unusual behavior like spam bookings, traffic spike, payment mismatch, repeated crashes, or suspicious user activity.
+- [ ] `ops.app_health_checks`: saves app uptime checks, URL status, latency, error message, and region/source of the check.
+- [ ] `ops.payment_reconciliation_runs`: saves payment matching results between app records and gateway/webhook data.
+- [ ] `ops.node_heartbeats`: saves heartbeat from Cloud Run/n8n/worker nodes so CPO-style monitoring knows what is alive.
+- [ ] `analytics.booking_facts`: saves analytics-friendly booking facts by date, city, property, owner, status, amount, and duration.
+- [ ] `analytics.payment_facts`: saves analytics-friendly payment facts by date, mode, status, gateway, city, owner, and amount.
+- [ ] `analytics.occupancy_facts`: saves occupied/bookable capacity by city/property/bed/time window for fast demand and dashboard reads.
+- [ ] `analytics.daily_kpi_snapshots`: saves one daily row for platform health: bookings, revenue, cancellations, issues, ratings, active beds, and active properties.
+- [ ] `analytics.city_daily_snapshots`: saves city-level daily rows: bookings, revenue, occupancy, issues, ratings, and growth.
+- [ ] `analytics.property_daily_snapshots`: saves property-level daily rows: bookings, revenue, occupancy, issues, ratings, and problem signals.
+- [ ] `analytics.owner_daily_snapshots`: saves owner-level daily rows: bookings, revenue, dues, payouts, issues, and ratings.
+- [ ] `analytics.job_daily_snapshots`: saves job health per day: run count, success count, failure count, average runtime, and lag.
+- [ ] `ai_logs.log_batches`: saves a safe batch of logs/findings prepared for AI review, with time range and source.
+- [ ] `ai_logs.audit_findings`: saves AI-readable audit concerns like unusual role change, repeated sensitive reveal, or suspicious admin action.
+- [ ] `ai_logs.payment_findings`: saves AI-readable payment issues like gateway mismatch, webhook missing, duplicate payment, or stuck checkout.
+- [ ] `ai_logs.booking_risk_findings`: saves AI-readable booking risks like spam booking, repeated cancellation, stuck booking, or unusual city spike.
+- [ ] `ai_logs.traffic_findings`: saves AI-readable traffic spikes, route errors, bot-like behavior, and rate-limit signals.
+- [ ] `ai_logs.app_health_findings`: saves AI-readable uptime, latency, crash, and failed deployment summaries.
+- [ ] `ai_logs.ai_summaries`: saves Gemini/n8n/CPO digest output, recommended actions, confidence, severity, and human review status.
+- [ ] `ai_logs.ai_alerts`: saves alerts sent to email/Slack/console, delivery status, recipients, and escalation state.
+
+### 2030 Database Speed Classes
+- [ ] Mark booking creation, bed lock, availability check, check-in, checkout, payment update, spam block, and app-down alert as immediate/fast paths.
+- [ ] Mark owner dashboards, issue queues, notices, property approvals, and profile updates as normal paths that can be seconds late.
+- [ ] Mark rating aggregation, daily snapshots, payout preparation, AI digest, and retention cleanup as scheduled paths that can be hourly or nightly.
+- [ ] Add a `speed_class` or equivalent note to every planned table/job so developers know what must be fast and what must be cheap.
+- [ ] Keep fast paths small: read by known ID or narrow indexed query, write only essential records, and push extra work to Pub/Sub/job queues.
+
+### 2030 Indexes, Views, And Load Reduction
+- [ ] Create indexes only for real queries: booking by user/status/date, booking by property/status/check-in, payment by booking/status/gateway ID, issue by status/severity/property, job by status/time.
+- [ ] Add privacy-safe Data Connect queries/views for consumer, owner, operator, and superadmin instead of letting clients read raw tables directly.
+- [ ] Add owner-safe rating views that show only aggregate ratings, never who gave each rating.
+- [ ] Add consumer-safe history views that show only the consumer's own bookings, payments, ratings, and issues.
+- [ ] Add BI-safe views that remove Aadhaar, phone, email, internal notes, secret metadata, and raw webhook payloads.
+- [ ] Move dashboard cards to snapshot reads so superadmin/owner/operator dashboards do not scan all bookings/payments.
+- [ ] Replace current full Firestore scans with incremental SQL jobs using `updated_at > watermark` or `id > last_processed_id`.
+
+### 2030 Jobs And When They Run
+- [ ] Booking lifecycle enforcer: event-driven immediately on booking changes, plus scheduled catch-up every 1-5 minutes for missed transitions.
+- [ ] No-show cancellation job: query only expired confirmed bookings, not all confirmed bookings.
+- [ ] Bed lock cleanup job: every 1-5 minutes, clears expired temporary locks from Firestore.
+- [ ] Payment webhook processor: runs immediately from gateway webhook, verifies signature, writes payment event, and updates payment status.
+- [ ] Payment reconciliation job: every 15-30 minutes for recent payments, plus daily full gateway comparison for finance safety.
+- [ ] Spam booking detector: immediate signal on booking attempt, plus 5-minute rolling window job for user/IP/property/city abuse.
+- [ ] High traffic detector: every 1-5 minutes, compares current traffic against normal baseline and writes anomaly if sudden spike happens.
+- [ ] Issue escalation job: every 15 minutes, escalates unresolved severe issues or SLA-breached issues.
+- [ ] Rating summary job: nightly, updates rating summaries from new rating events only.
+- [ ] Commission due generator: nightly after payment states are settled, creates dues only for completed and payment-confirmed cash bookings.
+- [ ] Payout preparation job: daily after dues generation, deducts dues and creates payout candidates.
+- [ ] Booking fact sync: hourly or near-real-time using watermarks.
+- [ ] Payment fact sync: hourly or near-real-time using watermarks.
+- [ ] Daily snapshot generator: after day close, writes KPI/city/property/owner/job snapshots.
+- [ ] Data quality validator: daily, checks missing owner, missing payment, invalid status, impossible dates, and orphan records.
+- [ ] App uptime checker: every 1-5 minutes, checks production website/app endpoint and writes health check results.
+- [ ] Function crash monitor: every 5-15 minutes, summarizes Cloud Logging errors into `ops` and `ai_logs`.
+- [ ] Node heartbeat monitor: every 1-5 minutes, checks whether n8n/Cloud Run/workers are alive.
+- [ ] AI digest job: 4 times per day, asks Gemini to summarize safe findings and send email.
+- [ ] Critical AI alert job: immediate when severity is critical; app down, payment mismatch, checkout failure spike, repeated crash, or suspected attack.
+- [ ] Retention cleanup job: nightly/weekly based on table policy; archives old raw logs and keeps permanent finance/audit records.
+
+### 2030 Pub/Sub And Workflow Rules
+- [ ] Use Pub/Sub for fast events: `booking.created`, `booking.confirmed`, `booking.modified`, `booking.checked_in`, `booking.completed`, `payment.updated`, `issue.reported`.
+- [ ] Use Cloud Scheduler for fixed-time jobs: snapshots, reconciliation, retention, AI digest, and daily finance chain.
+- [ ] Use Cloud Workflows for ordered chains: payment reconciliation before due generation, due generation before payout preparation, fact sync before snapshots.
+- [ ] Add idempotency keys to Pub/Sub handlers so retry never creates duplicate payment, due, payout, or issue records.
+- [ ] Add dead-letter handling for failed events so an operator can see and replay failed work safely.
+- [ ] Keep user request paths short: do not wait for analytics, AI, email, or heavy scans during booking/payment actions.
+
+### 2030 Retention And Archive Policy
+- [ ] Keep bookings, payments, dues, payouts, and audit events long-term because they are business and finance truth.
+- [ ] Keep raw debug logs short-term unless tied to an incident.
+- [ ] Keep AI summaries long enough to compare recurring problems, but do not store private raw user data inside summaries.
+- [ ] Keep temporary Firestore locks and rate windows only for minutes/hours.
+- [ ] Archive old job runs into daily/monthly summaries so ops tables stay fast.
+- [ ] Define deletion and export rules for user privacy requests before public scale.
+- [ ] Keep immutable finance records even when user-visible profile data is deleted or anonymized, according to legal/accounting requirements.
+
+### 2030 Security And Privacy
+- [ ] Use Firebase Auth for login identity and custom claims only for role hints; backend/database must still verify permissions.
+- [ ] Enforce role-based access in Data Connect queries and server functions, not only in UI buttons.
+- [ ] Use Firebase App Check for web/app clients to reduce abuse from fake clients.
+- [ ] Keep Aadhaar and sensitive identity data in a protected vault with encryption, masked display, and break-glass audit.
+- [ ] Add production MFA or second approval before any Aadhaar reveal or sensitive finance correction.
+- [ ] Store secrets only in Secret Manager or Firebase/Google managed secret config, never in code or public env files.
+- [ ] Rotate Razorpay, Gemini, email, and service credentials on a defined schedule.
+- [ ] Add rate limits for OTP, booking attempts, payment attempts, support messages, AI prompts, and admin actions.
+- [ ] Add security audit events for role change, settings change, payment correction, payout approval, Aadhaar reveal, owner approval, and emergency switch use.
+- [ ] Add anomaly detection for repeated failed login/OTP, many bookings from one IP, many cancellations, repeated payment mismatch, and suspicious admin actions.
+- [ ] Add least-privilege IAM: deployer, function runtime, Data Connect service, Cloud Logging reader, and email sender should have only required permissions.
+- [ ] Add backup and restore testing for PostgreSQL/Data Connect before production-scale launch.
+- [ ] Add security rules tests and Data Connect permission tests for every role: guest, consumer, owner, operator, superadmin.
+- [ ] Add a privacy-safe logging rule: logs should store IDs and error context, not full Aadhaar, full phone, full payment secrets, or raw tokens.
+
+### 2030 App Features - Website And Mobile
+- [ ] Build a fast PWA first: installable web app, offline shell, push notifications, and home-screen icon.
+- [ ] Plan Android app publishing through Google Play Console after core booking/payment flows are stable.
+- [ ] Add app store readiness: app icon, screenshots, privacy policy, data safety answers, content rating, testing track, production release checklist.
+- [ ] Use the same backend for website and mobile app so bookings/payments stay consistent.
+- [ ] Add live booking tracker: shows booking state, check-in deadline, bed status, payment status, issue status, and next action.
+- [ ] Add smart bed recommendation: fastest nearby available bed, best value bed, highest rated bed, and quiet/rest-friendly bed.
+- [ ] Add train tracking flow: consumer can enter train number/PNR and receive bed/rest reminders near destination.
+- [ ] Add geofenced check-in support only where safe: suggest check-in when near property, but never block valid support cases without operator override.
+- [ ] Add in-app support assistant for booking/payment/bed issues with human handoff.
+- [ ] Add owner command center: live bookings, beds needing attention, unpaid dues, issue SLA, and payout readiness.
+- [ ] Add operator control tower: city health, payment health, booking anomalies, owner approvals, issue queue, and job health.
+- [ ] Add superadmin future dashboard: revenue, growth, risk, AI findings, cost, uptime, and launch readiness.
+- [ ] Add smart notifications: booking reminders, checkout reminder, payment receipt, issue updates, owner alerts, operator escalations.
+- [ ] Add accessibility and language readiness: simple English first, Telugu/Hindi later, large tap targets, clear error messages.
+- [ ] Add trusted listing signals: verified owner, verified location, recent clean checkout count, rating count, and support response status.
+- [ ] Add ethical rewards only after real actions: cashback wallet, loyalty tiers, profile completion benefit, and no fake urgency.
+- [ ] Add AI-assisted listing quality checks: detect missing photos, suspicious descriptions, duplicate properties, and poor owner response patterns.
+- [ ] Add voice-friendly support later: user can speak issue details and app converts to support ticket summary.
+
+### 2030 Firebase Hosting, App Hosting, And Deployment
+- [ ] Keep current Firebase Hosting path stable for static export until the backend architecture is ready.
+- [ ] Evaluate Firebase App Hosting for the Next.js app because it supports modern full-stack Next.js, GitHub rollouts, Cloud Run, Cloud CDN, and Secret Manager integration.
+- [ ] Use preview channels for every risky UI/backend change before production.
+- [ ] Add separate environments: local, preview, staging, and production.
+- [ ] Keep production deploy manual or protected until tests, security checks, and smoke tests pass.
+- [ ] Add deployment checklist: build, lint, security rules tests, function deploy, hosting deploy, smoke test, rollback note.
+- [ ] Add rollback plan: previous hosting release, previous function version, database migration rollback, and incident note.
+- [ ] Add deployment health check: after deploy, app uptime checker and browser smoke test must pass before closing release.
+- [ ] Store production environment config and secrets outside repository.
+- [ ] Remove localhost-only auth bypass and dev booking preview before production app launch.
+
+### 2030 Debugging And Quality
+- [ ] Add local debugging guide for website, functions, Firestore emulator, Data Connect emulator, and payment sandbox.
+- [ ] Add standard bug report template: what happened, user role, booking/payment ID, time, browser/app version, expected result, actual result.
+- [ ] Add correlation IDs across booking, payment, webhook, function logs, audit logs, and AI findings.
+- [ ] Add automated smoke tests for guest browse, consumer booking, checkout, owner view, operator issue queue, and superadmin dashboard.
+- [ ] Add end-to-end payment sandbox tests before enabling live payment.
+- [ ] Add performance budgets for listing page, booking page, checkout, dashboard, and app startup.
+- [ ] Add monitoring for slow pages, slow Data Connect queries, expensive jobs, and failed Firestore/Data Connect permissions.
+- [ ] Add production incident runbook: app down, payments failing, bookings stuck, owner payout wrong, login broken, high traffic spike, and database cost spike.
+- [ ] Add QA checklist before Google Play launch: install, login, booking, payment, notification, offline behavior, privacy, permissions, and uninstall/reinstall behavior.
+
+### 2030 AI Orchestration And Monitoring
+- [ ] Use deterministic rules for detection first, then Gemini for explanation and summary.
+- [ ] Use Gemini/Genkit on the server side for audit summaries, payment issue summaries, crash summaries, and recommended actions.
+- [ ] Use Firebase AI Logic for future user-facing app AI features only when client-side Gemini access is needed and protected by App Check/rate limits.
+- [ ] Send AI email digest 4 times per day: morning health, midday booking/payment, evening operations, and end-of-day summary.
+- [ ] Send immediate alert when severity is critical: app down, checkout failure spike, payment mismatch, webhook failure, suspicious attack, or job chain stopped.
+- [ ] Add a CPO-style monitor that checks whether all AI/jobs are alive: log reader, payment monitor, booking monitor, traffic monitor, email sender, and ticket creator.
+- [ ] Add AI summary format: what happened, why it matters, affected IDs, likely cause, recommended next action, severity, confidence, and owner.
+- [ ] Add human approval before AI creates code changes, deploys fixes, changes settings, refunds payment, blocks users, or reveals sensitive data.
+- [ ] Add n8n only as an orchestrator where it helps: email routing, ticket creation, scheduled summaries, and cross-service workflow visibility.
+- [ ] Keep e2-medium server lightweight: do not depend on local LLM for serious monitoring; use Gemini API for analysis and keep local services for orchestration/heartbeats.
+- [ ] Add AI cost controls: summarize batches, cap prompt size, skip duplicate incidents, and store only one summary per repeated issue window.
+
+### 2030 Launch And Growth Readiness
+- [ ] Create launch checklist for first city: verified properties, owner training, support operator, payment test, refund policy, privacy policy, and emergency contact.
+- [ ] Create Google Play launch checklist: developer account, package name, signing key, app bundle, privacy policy URL, data safety form, screenshots, content rating, test track, production rollout.
+- [ ] Create web launch checklist: custom domain, HTTPS, SEO basics, PWA manifest, robots/sitemap, error pages, analytics, uptime monitoring, and support page.
+- [ ] Create operations checklist for each launch day: app health, payment health, booking health, traffic health, support queue, owner response, and AI digest review.
+- [ ] Add city expansion readiness score: active beds, verified owners, payment reliability, support coverage, demand signals, and issue rate.
+- [ ] Add post-launch learning loop: every week review bookings, failed payments, cancelled bookings, issue reports, owner response, user feedback, and AI findings.
 
 ## City Management
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access
