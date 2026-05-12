@@ -676,6 +676,44 @@
 - [ ] Add maintenance mode banner for planned downtime or degraded operations.
 - [ ] Add clear support path for users caught in partial failure: payment pending, booking stuck, checkout failed, or issue not submitted.
 
+### 2030 Minor Engineering Standards
+- [ ] Define database naming standards: schema names, table names, column names, indexes, views, enum names, and job names must use one clear convention.
+- [ ] Define ID strategy: when to use Firebase UID, UUID, readable booking code, gateway ID, idempotency key, and human-safe short code.
+- [ ] Define timezone rule: store timestamps in UTC, display in IST/local city time, and document day-close boundaries for snapshots/jobs.
+- [ ] Define money rule: store money as integer paise, never floating rupees, and keep currency code on finance records.
+- [ ] Define valid status transitions for booking, payment, payout, issue, owner application, support ticket, refund, and job run.
+- [ ] Define standard error code catalog for app/backend errors so users, operators, logs, and AI summaries use the same language.
+- [ ] Define API/Data Connect versioning so old mobile app versions survive backend changes during rollout.
+- [ ] Define seed/test data plan: fake consumers, owners, properties, beds, bookings, payments, issues, and payouts for repeatable QA.
+- [ ] Define safe admin search: booking code, payment ID, owner/property ID, and phone last digits only; avoid broad private-data search.
+- [ ] Define attachment policy for support tickets, issue photos, receipts, property verification documents, and evidence files.
+- [ ] Define supported browser/device matrix for web, PWA, and Android app launch.
+- [ ] Define observability naming: logs, metrics, job names, Pub/Sub topics, event names, and AI finding names must match one convention.
+- [ ] Define manual correction policy: what operators can fix, what needs superadmin, and what needs two-person approval.
+- [ ] Define ownership map: every schema, table, job, dashboard, policy, and alert must have a clear business/engineering owner.
+
+### 2030 Merged Planning Notes
+- [ ] Keep `docs/TODO.md` as the planning backlog after merging old planning notes; avoid creating duplicate planning files unless they are implementation specs or runbooks.
+- [ ] Keep durable runbooks separate: README, Masterbook, deployment checklist, auth checklist, QA log, and work log remain useful outside TODO.
+- [ ] Preserve current policy over old MVP notes: Aadhaar is optional in booking unless future policy changes, consumer sees final safe pricing, and backend remains source of truth.
+- [ ] Keep pilot-city readiness in launch planning: Kavali, Nellore, Ongole, Chennai, Bangalore, Vijayawada, Guntur, Vizag, Hyderabad, and Tirupati need city-by-city readiness checks before expansion.
+- [ ] Finalize cancellation/no-show policy in one place: booking cancellation window, no-show grace, short-stay no-charge rule, refund rule, and operator override rule.
+- [ ] Add QR/app-based payment-at-property flow planning only after online checkout and reconciliation are stable.
+- [ ] Define exact Phase 1 SQL/Data Connect columns, relationships, indexes, views, and role-safe queries before implementation begins.
+- [ ] Define exact Data Connect migration mapping from every current Firestore collection to SQL table/view, including skipped temporary collections.
+- [ ] Define exact snapshot fields for KPI, city, property, owner, job, and automation snapshots before dashboard migration.
+- [ ] Verify demand-pricing production deployment: scheduled functions deployed, summaries updating, owner overrides working, consumer labels correct, and booking checkout uses locked demand price.
+- [ ] Keep demand-pricing defaults documented before implementation: warning at 60%, property thresholds around 70/90%, city thresholds around 80/90%, higher city/property increase wins, global cap applies.
+- [ ] Keep demand-pricing anti-abuse rule: blocked beds do not count as available capacity, so owners cannot fake high occupancy by blocking beds.
+- [ ] Add Aadhaar/security deploy follow-up: production secret/pepper/key configuration must be set before identity features are trusted.
+- [ ] Add backfill readiness check: admin credentials must be available before running booking availability or SQL migration backfills.
+- [ ] Add checkout manual QA checklist: platform fee lock, no fee on cancelled/no-charge bookings, old bookings keep old fee, checkout shows correct amount, and payment record matches booking.
+- [ ] Add route/role manual QA checklist: consumer, owner, operator, and superadmin access must be checked with real authenticated accounts.
+- [ ] Add superadmin/operator KPI acceptance list: bookings today/week/month, gross collection, net revenue, active properties/owners, occupancy by city, payment success/failure, and top cities.
+- [ ] Add concurrency acceptance test: temporary bed lock, payment timeout release, transaction conflict check, and no double booking for the same bed/time.
+- [ ] Add payment webhook signature verification and replay/idempotency checks before live payment launch.
+- [ ] Add old planning document cleanup rule: once content is merged into TODO or a runbook, remove the duplicate planning file to avoid conflicting instructions.
+
 ## City Management
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access
 - [x] Prevent duplicate cities — reject add/save if a city with the same name + state combination already exists

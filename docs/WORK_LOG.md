@@ -44,7 +44,7 @@
 ## 2026-05-01
 
 ### Completed
-- Added `docs/DEMAND_PRICING_LOGIC.md` as the single easy-to-read source for on-demand pricing rules, permissions, jobs, Firestore collections, UI locations, and pending verification.
+- Added an easy-to-read on-demand pricing rules note; that planning content was later merged into `docs/TODO.md` as the single planning backlog.
 - Expanded automatic peak-demand pricing into a concrete implementation checklist in `docs/TODO.md`.
 - Added shared demand-pricing rule helpers in `src/lib/demand-pricing.js`:
   - property thresholds: 70-89% occupancy adds 20%, 90-100% adds 50%
