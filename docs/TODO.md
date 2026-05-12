@@ -439,6 +439,111 @@
 - [ ] Add city expansion readiness score: active beds, verified owners, payment reliability, support coverage, demand signals, and issue rate.
 - [ ] Add post-launch learning loop: every week review bookings, failed payments, cancelled bookings, issue reports, owner response, user feedback, and AI findings.
 
+### 2030 Missing Maturity Layer
+- [ ] Add this layer before public scale so the app is not only smart, but also legally safe, financially safe, recoverable, and trusted.
+- [ ] Keep the rule simple: every risky user action needs policy, audit, support recovery, and rollback thinking.
+
+### 2030 Legal, Policy, And Consent
+- [ ] Write plain Terms and Conditions for consumers: what booking means, payment responsibility, checkout rules, cancellation rules, and support boundaries.
+- [ ] Write plain Owner Agreement: listing rules, property truth, commission, payout timing, bad-bed handling, safety expectations, and platform suspension rights.
+- [ ] Write Privacy Policy: what data is collected, why it is collected, how long it is kept, who can see it, and how users request deletion/export.
+- [ ] Write Cancellation and Refund Policy: no-show, short stay, failed payment, duplicate payment, owner issue, bad bed, and operator-approved refund.
+- [ ] Write Payment Dispute Policy: what happens when consumer says paid but app says unpaid, or gateway webhook is delayed.
+- [ ] Add user consent records for location, notifications, analytics, optional Aadhaar, AI-assisted support, and marketing messages.
+- [ ] Add policy version tracking so each user/owner record knows which policy version they accepted.
+- [ ] Add in-app policy screens and short child-simple summaries before the full legal text.
+
+### 2030 Payment, Refund, And Accounting Safety
+- [ ] Add refund request table: booking, payment, reason, requested by, status, approved by, amount, gateway refund ID, and timestamps.
+- [ ] Add duplicate payment detector: same booking, same gateway order, same amount, repeated success, or webhook replay.
+- [ ] Add failed payment retry flow: show safe retry, never double-book, and never mark paid until gateway verification succeeds.
+- [ ] Add chargeback/dispute tracking for gateway disputes, evidence, operator notes, and final outcome.
+- [ ] Add receipt/invoice generation after successful checkout with booking ID, payment ID, amount, taxes/fees if applicable, and support contact.
+- [ ] Add Razorpay settlement reconciliation: compare app payment, Razorpay payment, Razorpay settlement, owner payout, and platform fee.
+- [ ] Add tax/GST/accounting export planning before scale: daily revenue export, owner payout export, commission due export, and refund export.
+- [ ] Add manual finance correction flow with two-person approval and audit trail.
+- [ ] Add payment incident playbook: gateway down, webhook delayed, duplicate payment, refund stuck, and settlement mismatch.
+
+### 2030 Trust, Safety, And Abuse Prevention
+- [ ] Add owner verification workflow: phone, identity, payout account, property ownership/permission, and operator approval.
+- [ ] Add property verification workflow: photos, address, map pin, nearby landmark, city validity, and operator/superadmin approval.
+- [ ] Add fake property detector: duplicate address, reused photos, impossible location, repeated complaints, or suspicious owner pattern.
+- [ ] Add unsafe listing reporting: consumer can report unsafe/closed/wrong-location property and operator reviews it.
+- [ ] Add bad owner/user review queue with reasons, evidence, decision, appeal status, and unblock path.
+- [ ] Add temporary suspension controls for property, bed, owner, or consumer with required reason and audit.
+- [ ] Add operator override rules for emergency support, but every override must be logged and reviewable.
+- [ ] Add trust badges only when backed by real data: verified property, verified owner, clean checkout history, fast support response, and low issue rate.
+
+### 2030 Mobile App Security
+- [ ] Use Firebase App Check for web and mobile so backend requests come from trusted app clients where possible.
+- [ ] Use Play Integrity through Firebase App Check for Android builds distributed through Google Play.
+- [ ] Add app signing and key management checklist for Android release builds.
+- [ ] Add deep link and app link plan for login return, booking continuation, payment result, support ticket, and train tracking.
+- [ ] Add push notification token table with device ID, user ID, platform, token status, app version, last seen, and opt-in status.
+- [ ] Add forced update flow: minimum supported app version, soft update message, hard block only for unsafe old versions.
+- [ ] Add rooted/tampered device risk handling where possible, but keep support fallback for real users.
+- [ ] Add mobile permission education for location and notification: explain why it helps before asking the OS permission.
+
+### 2030 Cost And Capacity Monitoring
+- [ ] Add Google Cloud Billing budgets and alerts for total project cost, with warning levels before money surprises happen.
+- [ ] Add monthly cost dashboard: Firebase Hosting/App Hosting, Cloud Functions, Cloud Run, Cloud SQL, Firestore, Cloud Logging, Gemini, and network egress.
+- [ ] Add per-job cost thinking: runtime, records processed, reads/writes, API calls, and whether it scanned too much data.
+- [ ] Add Gemini cost guardrails: prompt size limit, batch size limit, duplicate incident suppression, daily spend cap target, and fallback summary without AI.
+- [ ] Add Cloud Logging retention controls so debug logs do not become a hidden cost problem.
+- [ ] Add database growth forecast: bookings/day, payments/day, logs/day, snapshots/day, and expected storage after 3/6/12 months.
+- [ ] Add cost anomaly alert: if today's cloud spend is much higher than normal, create an ops anomaly and email summary.
+- [ ] Add scale plan for first 100, 1,000, 10,000, and 100,000 bookings.
+
+### 2030 Disaster Recovery And Incident Management
+- [ ] Define RPO: how much recent data loss is acceptable for booking, payment, audit, and analytics data.
+- [ ] Define RTO: how quickly the website/app, booking, payment, and operator console must recover after an outage.
+- [ ] Enable Cloud SQL automated backups and point-in-time recovery planning for the Data Connect PostgreSQL database.
+- [ ] Run backup restore drills before production scale: restore to test instance, verify row counts, verify sample booking/payment records.
+- [ ] Add migration rollback tests for every database migration before production deployment.
+- [ ] Add incident severity levels: SEV1 app/payment down, SEV2 booking degraded, SEV3 dashboard/job issue, SEV4 minor bug.
+- [ ] Add incident timeline table: detected at, acknowledged at, owner, status, impact, actions, fixed at, and postmortem link.
+- [ ] Add emergency production freeze process: stop risky deploys during payment incident, booking incident, or database migration issue.
+- [ ] Add public/internal status note template for outages and recovery updates.
+
+### 2030 AI Safety And Quality Control
+- [ ] Add AI prompt/version table so every Gemini summary can be traced to the prompt version that produced it.
+- [ ] Add AI output review: human marks each important AI finding as useful, wrong, duplicate, or needs action.
+- [ ] Add false-positive tracking so AI alerts improve over time and do not create alert fatigue.
+- [ ] Add PII redaction before AI reads logs: remove full phone, full Aadhaar, payment secrets, tokens, and private notes.
+- [ ] Add Gemini API failure fallback: deterministic alert still sends even if AI summary fails.
+- [ ] Add AI confidence and severity rules: low-confidence findings go to digest, high-confidence critical findings can alert immediately.
+- [ ] Add human approval before AI creates tickets, code changes, setting changes, user blocks, refunds, payouts, or production deploys.
+- [ ] Add AI safety tests with fake logs: payment mismatch, app down, spam bookings, sensitive data leak, and duplicate incident.
+
+### 2030 Notifications And Communication
+- [ ] Add notification preference center: booking, payment, support, owner alerts, marketing, train alerts, and emergency alerts.
+- [ ] Add notification delivery table: channel, recipient, template, status, provider message ID, retry count, and failure reason.
+- [ ] Add channel strategy: in-app first, push for app users, email for receipts/admin digests, SMS/WhatsApp only for high-value urgent events.
+- [ ] Add failed notification retry job with backoff and final operator visibility.
+- [ ] Add emergency broadcast workflow for app outage, payment outage, city-wide issue, or safety warning.
+- [ ] Add message template approval for payment, refund, Aadhaar, owner suspension, support, and emergency messages.
+- [ ] Add quiet-hours and anti-spam rules so users do not get too many messages.
+
+### 2030 Data Governance And Compliance
+- [ ] Add data classification per table/column: public, internal, confidential, financial, identity, secret, or AI-safe.
+- [ ] Add column-level sensitivity labels in schema docs before implementation.
+- [ ] Add access review checklist every month: who can see finance, identity, audit, AI logs, and superadmin controls.
+- [ ] Add schema migration versioning and migration owner for every Data Connect/PostgreSQL change.
+- [ ] Add data lineage for dashboard metrics: metric name, source table, job, snapshot, refresh time, and owner.
+- [ ] Add data quality rules for each critical table: required fields, valid status transitions, uniqueness, foreign key integrity, and timestamp sanity.
+- [ ] Add user data export process: consumer can request profile/booking/payment/rating data in safe format.
+- [ ] Add data deletion/anonymization process that protects privacy while preserving required finance/audit records.
+
+### 2030 Scale, Load, And Chaos Testing
+- [ ] Load test booking creation so two consumers cannot book the same bed at the same time.
+- [ ] Load test payment webhook spikes so duplicate/retry webhooks do not corrupt payment state.
+- [ ] Load test city search during high traffic so listing reads stay fast and cheap.
+- [ ] Load test owner dashboard and superadmin dashboard to confirm they read snapshots, not raw full tables.
+- [ ] Add overbooking race-condition test around bed locks, booking availability, checkout, modification, and cancellation.
+- [ ] Add chaos tests: gateway down, Gemini down, email provider down, database slow, function timeout, and Pub/Sub retry storm.
+- [ ] Add browser/mobile performance testing on low-end Android devices and slow mobile network.
+- [ ] Add launch-day traffic simulation before every new city launch.
+
 ## City Management
 - [x] Allow both operator and superadmin to add, edit, and disable cities — currently only superadmin can; operator should have the same city management access
 - [x] Prevent duplicate cities — reject add/save if a city with the same name + state combination already exists
