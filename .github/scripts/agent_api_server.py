@@ -11,7 +11,7 @@ import re
 
 # Configuration
 OLLAMA_URL = "http://localhost:11434/api/generate"
-MODEL_NAME = "qwen2.5-coder:1.5b" # You can change this to llama3, mistral, codellama, etc.
+MODEL_NAME = "qwen2.5-coder:0.5b" # You can change this to llama3, mistral, codellama, etc.
 PORT = 5000
 
 app = Flask(__name__)
