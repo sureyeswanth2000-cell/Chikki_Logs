@@ -145,7 +145,7 @@ def handle_webhook():
         return jsonify(response_data)
 
 def start_ngrok():
-    ngrok.set_auth_token("3FcUQTcazhhGGgkQAyU432bgFkN_7YzJsWUxPAppwin3YxFm2")
+    ngrok.set_auth_token("3Fc9gJIBs7lKjrP9INkXAw2ZhFD_379yBjD1Af7w9Gyi5wAmZ")
     public_url = ngrok.connect(PORT, domain="apple-barrier-slip.ngrok-free.dev")
     print("\n" + "="*50)
     print("=== ADD THESE TO GITHUB SECRETS ===")
