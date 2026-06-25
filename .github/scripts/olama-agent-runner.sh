@@ -34,7 +34,7 @@ git config user.name "github-actions[bot]"
 git config user.email "github-actions[bot]@users.noreply.github.com"
 git checkout -B "$COMMIT_BRANCH"
 
-CURRENT_PROMPT="${SESSION_PROMPT:-You are an agentic AI developer assigned to complete the Chikki Logs project. Review the repository and plan the next development steps. Implement code changes automatically and iterate until the project is complete. After each iteration, return JSON with fields: done, patch, next_prompt, session_url, summary.}" 
+CURRENT_PROMPT="${SESSION_PROMPT:-You are an agentic AI developer assigned to complete the Chikki Logs project. Review the repository and plan the next development steps. Output your changes as a valid unified diff (git patch format) inside a \`\`\`diff codeblock.}" 
 
 apply_patch() {
   local patch_file="$1"
@@ -59,7 +59,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo "\n=== Iteration $i ===" | tee -a "$LOG_FILE"
 
   rm -f repo-archive.tar.gz
-  tar --exclude=.git --exclude=node_modules --exclude=.next --exclude=build --exclude=dist -czf /tmp/repo-archive.tar.gz .
+  tar --exclude="node_modules" --exclude=".next" --exclude=".firebase" --exclude="out" --exclude="repo-archive.tar.gz" --exclude=".git" -czf /tmp/repo-archive.tar.gz .
   mv /tmp/repo-archive.tar.gz .
 
   PAYLOAD_FILE=$(mktemp)
