@@ -104,11 +104,15 @@ def check_auth():
 
 @app.route("/", methods=["POST"])
 def handle_webhook():
+    print("Files in request:", list(request.files.keys()))
+    print("Form in request:", list(request.form.keys()))
+    print("Content type:", request.content_type)
     metadata_file = request.files.get("metadata")
     repo_archive = request.files.get("repo_archive")
     
     if not metadata_file or not repo_archive:
-        return jsonify({"error": "Missing files"}), 400
+        print("Error: metadata or repo_archive missing!")
+        return jsonify({"error": f"Missing files. Got files: {list(request.files.keys())}"}), 400
 
     metadata = json.loads(metadata_file.read().decode('utf-8'))
     prompt = metadata.get("prompt", "")
