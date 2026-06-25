@@ -59,7 +59,8 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
   echo "\n=== Iteration $i ===" | tee -a "$LOG_FILE"
 
   rm -f repo-archive.tar.gz
-  tar --exclude=.git --exclude=repo-archive.tar.gz -czf repo-archive.tar.gz .
+  tar --exclude=.git -czf /tmp/repo-archive.tar.gz .
+  mv /tmp/repo-archive.tar.gz .
 
   PAYLOAD_FILE=$(mktemp)
   trap 'rm -f "$PAYLOAD_FILE"' EXIT
